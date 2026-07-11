@@ -1,40 +1,32 @@
-mod engine;
-mod index;
-mod settings;
+pub mod engine;
+pub mod http_daemon;
+pub mod index;
+pub mod settings;
+pub mod state;
 mod steam;
 
-use index::{Wallpaper, RescanResult};
-use settings::PlaybackSettings;
+use index::{RescanResult, Wallpaper};
+use state::SharedState;
 use steam::SteamState;
-use std::sync::Mutex;
+use std::sync::Arc;
 use tauri::{Emitter, Manager, State};
-use tokio::process::Child;
-use tokio::sync::Mutex as AsyncMutex;
 
-/// Shared app state (replaces Python daemon STATE + RUNNING).
+/// Tauri-managed app state (same core as the headless HTTP daemon).
 pub struct AppState {
-    pub items: Mutex<Vec<Wallpaper>>,
-    pub settings: Mutex<PlaybackSettings>,
-    pub current_id: Mutex<Option<String>>,
-    pub child: AsyncMutex<Option<Child>>,
+    pub inner: Arc<SharedState>,
 }
 
 impl AppState {
     pub fn new() -> Self {
-        let items = index::load_cache();
-        let settings = settings::load();
         Self {
-            items: Mutex::new(items),
-            settings: Mutex::new(settings),
-            current_id: Mutex::new(None),
-            child: AsyncMutex::new(None),
+            inner: Arc::new(SharedState::new()),
         }
     }
 }
 
 #[tauri::command]
 fn list_wallpapers(state: State<'_, AppState>) -> Vec<Wallpaper> {
-    let guard = state.items.lock().unwrap();
+    let guard = state.inner.items.lock().unwrap();
     eprintln!("[lwe] list_wallpapers called, in-memory={}", guard.len());
     if !guard.is_empty() {
         return guard.clone();
@@ -42,7 +34,7 @@ fn list_wallpapers(state: State<'_, AppState>) -> Vec<Wallpaper> {
     drop(guard);
     let items = index::load_cache();
     eprintln!("[lwe] list_wallpapers cache fallback={}", items.len());
-    let mut g = state.items.lock().unwrap();
+    let mut g = state.inner.items.lock().unwrap();
     *g = items.clone();
     items
 }
@@ -50,19 +42,18 @@ fn list_wallpapers(state: State<'_, AppState>) -> Vec<Wallpaper> {
 #[tauri::command]
 async fn rescan(state: State<'_, AppState>) -> Result<RescanResult, String> {
     let prev = {
-        let g = state.items.lock().map_err(|e| e.to_string())?;
+        let g = state.inner.items.lock().map_err(|e| e.to_string())?;
         if g.is_empty() {
             None
         } else {
             Some(g.clone())
         }
     };
-    // heavy walkdir work off the async runtime
     let result = tokio::task::spawn_blocking(move || index::rescan(prev))
         .await
         .map_err(|e| format!("rescan join error: {e}"))?;
     if result.ok {
-        let mut g = state.items.lock().map_err(|e| e.to_string())?;
+        let mut g = state.inner.items.lock().map_err(|e| e.to_string())?;
         *g = result.items.clone();
     }
     Ok(result)
@@ -77,21 +68,20 @@ async fn launch(
     if id.trim().is_empty() {
         return Err("missing id".into());
     }
-    let base = state.settings.lock().unwrap().clone();
+    let base = state.inner.settings.lock().unwrap().clone();
     let merged = if let Some(patch) = opts {
         settings::merge(&base, &patch)
     } else {
         base
     };
     {
-        let mut g = state.settings.lock().unwrap();
+        let mut g = state.inner.settings.lock().unwrap();
         *g = merged.clone();
     }
     settings::save(&merged);
 
-    // drop previous child handle if we own one
     {
-        let mut ch = state.child.lock().await;
+        let mut ch = state.inner.child.lock().await;
         if let Some(mut c) = ch.take() {
             let _ = c.kill().await;
         }
@@ -99,11 +89,11 @@ async fn launch(
 
     let child = engine::spawn_engine(&id, &merged).await?;
     {
-        let mut ch = state.child.lock().await;
+        let mut ch = state.inner.child.lock().await;
         *ch = Some(child);
     }
     {
-        let mut cur = state.current_id.lock().unwrap();
+        let mut cur = state.inner.current_id.lock().unwrap();
         *cur = Some(id.clone());
     }
 
@@ -117,14 +107,14 @@ async fn launch(
 #[tauri::command]
 async fn stop(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     {
-        let mut ch = state.child.lock().await;
+        let mut ch = state.inner.child.lock().await;
         if let Some(mut c) = ch.take() {
             let _ = c.kill().await;
         }
     }
     engine::kill_engine().await;
     {
-        let mut cur = state.current_id.lock().unwrap();
+        let mut cur = state.inner.current_id.lock().unwrap();
         *cur = None;
     }
     Ok(serde_json::json!({ "ok": true }))
@@ -132,14 +122,14 @@ async fn stop(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 fn current(state: State<'_, AppState>) -> serde_json::Value {
-    let id = state.current_id.lock().unwrap().clone();
-    let opts = state.settings.lock().unwrap().clone();
+    let id = state.inner.current_id.lock().unwrap().clone();
+    let opts = state.inner.settings.lock().unwrap().clone();
     serde_json::json!({ "id": id, "opts": opts })
 }
 
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> serde_json::Value {
-    let s = state.settings.lock().unwrap().clone();
+    let s = state.inner.settings.lock().unwrap().clone();
     serde_json::json!({ "ok": true, "settings": s })
 }
 
@@ -148,10 +138,10 @@ fn set_settings(
     opts: serde_json::Value,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let base = state.settings.lock().unwrap().clone();
+    let base = state.inner.settings.lock().unwrap().clone();
     let merged = settings::merge(&base, &opts);
     {
-        let mut g = state.settings.lock().unwrap();
+        let mut g = state.inner.settings.lock().unwrap();
         *g = merged.clone();
     }
     settings::save(&merged);
@@ -161,7 +151,7 @@ fn set_settings(
 #[tauri::command]
 async fn open_folder(id: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let path = {
-        let items = state.items.lock().unwrap();
+        let items = state.inner.items.lock().unwrap();
         items
             .iter()
             .find(|w| w.id == id)
@@ -183,7 +173,6 @@ async fn open_folder(id: String, state: State<'_, AppState>) -> Result<serde_jso
             "path": path
         }));
     }
-    // xdg-open like Python daemon (also works under Tauri opener)
     let status = tokio::process::Command::new("xdg-open")
         .arg(&path)
         .stdin(std::process::Stdio::null())
@@ -211,8 +200,8 @@ async fn list_monitors() -> serde_json::Value {
 
 #[tauri::command]
 fn health(state: State<'_, AppState>) -> serde_json::Value {
-    let count = state.items.lock().unwrap().len();
-    let current = state.current_id.lock().unwrap().clone();
+    let count = state.inner.items.lock().unwrap().len();
+    let current = state.inner.current_id.lock().unwrap().clone();
     serde_json::json!({
         "ok": true,
         "count": count,
@@ -222,10 +211,7 @@ fn health(state: State<'_, AppState>) -> serde_json::Value {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Prefer GPU compositing in WebKitGTK (software path = CPU melt + flicker).
-    // 0 = compositing ON. Must be set before WebKit process spawn.
     std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "0");
-    // Don't force software GL
     std::env::remove_var("LIBGL_ALWAYS_SOFTWARE");
     std::env::remove_var("GALLIUM_DRIVER");
 
@@ -258,9 +244,13 @@ pub fn run() {
             steam::workshop_unsubscribe,
         ])
         .setup(|app| {
-            // seed index if empty — never block the event loop on a full walk+thumb pass
             let state = app.state::<AppState>();
-            let empty = state.items.lock().unwrap().is_empty();
+
+            // Prefer standalone systemd daemon if already bound; otherwise embed HTTP for browser gallery.
+            http_daemon::spawn_embedded(state.inner.clone());
+
+            // seed index if empty — never block the event loop on a full walk+thumb pass
+            let empty = state.inner.items.lock().unwrap().is_empty();
             if empty {
                 let items = index::load_cache();
                 if items.is_empty() {
@@ -271,7 +261,7 @@ pub fn run() {
                             .ok();
                         if let Some(result) = result {
                             if let Some(st) = handle.try_state::<AppState>() {
-                                if let Ok(mut g) = st.items.lock() {
+                                if let Ok(mut g) = st.inner.items.lock() {
                                     *g = result.items;
                                 }
                             }
@@ -279,10 +269,9 @@ pub fn run() {
                         }
                     });
                 } else {
-                    // backfill thumbs for pre-thumb caches off the UI thread
                     let handle = app.handle().clone();
                     {
-                        let mut g = state.items.lock().unwrap();
+                        let mut g = state.inner.items.lock().unwrap();
                         *g = items.clone();
                     }
                     tauri::async_runtime::spawn(async move {
@@ -296,7 +285,7 @@ pub fn run() {
                         .ok();
                         if let Some(items) = items {
                             if let Some(st) = handle.try_state::<AppState>() {
-                                if let Ok(mut g) = st.items.lock() {
+                                if let Ok(mut g) = st.inner.items.lock() {
                                     *g = items;
                                 }
                             }
@@ -305,9 +294,10 @@ pub fn run() {
                     });
                 }
             } else {
-                // warm thumbs for in-memory list without blocking window show
-                let mut items = state.items.lock().unwrap().clone();
-                let need = items.iter().any(|w| w.thumb.is_empty() && !w.preview.is_empty());
+                let mut items = state.inner.items.lock().unwrap().clone();
+                let need = items
+                    .iter()
+                    .any(|w| w.thumb.is_empty() && !w.preview.is_empty());
                 if need {
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
@@ -320,7 +310,7 @@ pub fn run() {
                         .ok();
                         if let Some(items) = items {
                             if let Some(st) = handle.try_state::<AppState>() {
-                                if let Ok(mut g) = st.items.lock() {
+                                if let Ok(mut g) = st.inner.items.lock() {
                                     *g = items;
                                 }
                             }
@@ -330,7 +320,35 @@ pub fn run() {
                 }
             }
 
-            // Force GPU compositing on WebKitGTK (Settings, not WebView).
+            // Auto-rescan every 45s + notify UI (even if HTTP daemon already owns rescan, refresh memory).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            http_daemon::AUTO_RESCAN_SEC,
+                        ))
+                        .await;
+                        let prev = handle
+                            .try_state::<AppState>()
+                            .and_then(|st| st.inner.items.lock().ok().map(|g| g.clone()));
+                        let result = tokio::task::spawn_blocking(move || index::rescan(prev))
+                            .await
+                            .ok();
+                        if let Some(result) = result {
+                            if result.ok {
+                                if let Some(st) = handle.try_state::<AppState>() {
+                                    if let Ok(mut g) = st.inner.items.lock() {
+                                        *g = result.items;
+                                    }
+                                }
+                                let _ = handle.emit("library-updated", ());
+                            }
+                        }
+                    }
+                });
+            }
+
             #[cfg(target_os = "linux")]
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.with_webview(|wv| {
@@ -340,7 +358,6 @@ pub fn run() {
                         settings.set_hardware_acceleration_policy(
                             HardwareAccelerationPolicy::Always,
                         );
-                        // keep JS/WebGL paths alive for CSS transform layers
                         settings.set_enable_webgl(true);
                         eprintln!(
                             "[lwe] WebKit HA policy={:?}",
@@ -357,3 +374,5 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+// bins use wpengine_lib::{http_daemon, index, ...}

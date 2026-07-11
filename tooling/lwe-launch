@@ -49,21 +49,21 @@ POS="$ID"
 if [ "$has_screen" = 0 ] && [ "$has_win" = 0 ]; then
   MONS=()
   if command -v hyprctl >/dev/null 2>&1; then
-    while IFS= read -r m; do [ -n "$m" ] && MONS+=("$m"); done < <(
-      hyprctl -j monitors 2>/dev/null | python3 -c "import sys,json;[print(x['name']) for x in json.load(sys.stdin)]" 2>/dev/null
-    )
+    if command -v jq >/dev/null 2>&1; then
+      while IFS= read -r m; do [ -n "$m" ] && MONS+=("$m"); done < <(
+        hyprctl -j monitors 2>/dev/null | jq -r '.[].name' 2>/dev/null
+      )
+    fi
   fi
   if [ ${#MONS[@]} -gt 0 ]; then
     for mon in "${MONS[@]}"; do
       SCREEN_ARGS+=(--screen-root "$mon" --bg "$ID")
-      # --scaling applies to previous --screen-root/--bg (engine docs)
       if [ -n "${LWE_SCALING:-}" ]; then
         SCREEN_ARGS+=(--scaling "$LWE_SCALING")
       fi
     done
     POS=""
   elif [ -n "${LWE_SCALING:-}" ]; then
-    # windowed / single default background
     GLOBAL+=(--scaling "$LWE_SCALING")
   fi
 elif [ -n "${LWE_SCALING:-}" ]; then

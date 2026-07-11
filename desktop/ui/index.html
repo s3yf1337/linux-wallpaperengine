@@ -643,7 +643,7 @@ const ICON_TOKENS = {
 /* icons pre-baked into HTML; svg() still used for dynamic card/type icons */
 
 /* ============================================================
-   Real backend (lwe-daemon)
+   Real backend (Tauri invoke — Rust index/engine inside the app)
    ============================================================ */
 /* Tauri 2 backend via invoke (withGlobalTauri) */
 function tauriApi(){
@@ -767,13 +767,7 @@ function fileUrl(p){
   return convertFileSrc(p);
 }
 
-/* ---------- API ---------- */
-async function api(path){
-  const r = await fetch(DAEMON + path);
-  if(!r.ok) throw new Error(path + ' HTTP ' + r.status);
-  return r.json();
-}
-
+/* ---------- API (Tauri invoke — no Python/HTTP from the desktop UI) ---------- */
 function settingsPayload(s){
   const o = s || state.settings;
   return {

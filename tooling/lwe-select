@@ -1,33 +1,30 @@
 #!/usr/bin/env bash
-# TUI wallpaper picker backed by ~/.cache/lwe_index.json (built by lwe-index.py).
+# TUI wallpaper picker backed by ~/.cache/lwe_index.json (built by lwe-index).
 # Fuzzy-search by title/type/tags/id, Enter launches on the desktop.
-# Forces bash for fzf preview even when the user's $SHELL is fish.
+# Requires: fzf, jq. Forces bash for fzf preview even when $SHELL is fish.
 set -euo pipefail
 
 INDEX="$HOME/.cache/lwe_index.json"
-[ -f "$INDEX" ] || lwe-index.py --rebuild >/dev/null
+if [ ! -f "$INDEX" ]; then
+  if command -v lwe-index >/dev/null 2>&1; then
+    lwe-index --rebuild >/dev/null
+  else
+    echo "missing $INDEX and lwe-index not in PATH" >&2
+    exit 1
+  fi
+fi
 
-# fzf uses $SHELL to run --preview scripts; force bash so our sh syntax works
-# under fish/zsh etc.
+command -v fzf >/dev/null 2>&1 || { echo "fzf required" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "jq required" >&2; exit 1; }
+
 export SHELL=/bin/bash
 
-pick=$(python3 - "$INDEX" <<'PY'
-import json, sys, subprocess
-items = json.load(open(sys.argv[1]))
-lines = [f"{it['title']} [{it['type']}] {it['id']}" for it in items]
-inp = "\n".join(lines)
-try:
-    out = subprocess.run(
-        ["fzf", "--with-nth", "1",
-         "--preview-window", "right:40%:wrap",
-         "--preview",
-         r'''id=$(echo {} | grep -oE '[0-9]+$'); d="$HOME/.local/share/Steam/steamapps/workshop/content/431960/$id"; pj="$d/project.json"; prev="$d/preview.jpg"; [ -f "$prev" ] && echo "file://$prev"; echo; sed -n "1,16p" "$pj"''',
-         "--prompt", "wallpaper> "],
-        input=inp, capture_output=True, text=True).stdout.strip()
-except Exception:
-    out = ""
-print(out)
-PY
+pick=$(
+  jq -r '.[] | "\(.title) [\(.type)] \(.id)"' "$INDEX" \
+  | fzf --with-nth 1 \
+        --preview-window 'right:40%:wrap' \
+        --preview 'id=$(echo {} | grep -oE "[0-9]+$"); d="$HOME/.local/share/Steam/steamapps/workshop/content/431960/$id"; prev="$d/preview.jpg"; [ -f "$prev" ] && echo "file://$prev"; echo; sed -n "1,16p" "$d/project.json" 2>/dev/null' \
+        --prompt 'wallpaper> ' || true
 )
 
 [ -z "$pick" ] && { echo "cancelled"; exit 0; }

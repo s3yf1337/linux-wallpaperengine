@@ -4,27 +4,34 @@ Complete toolkit to run Steam Wallpaper Engine backgrounds on CachyOS/Hyprland/W
 on top of the [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine) fork.
 
 This is a fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine)
-with added CEF 149 support and a tooling layer for Steam Wallpaper Engine on CachyOS/Hyprland/Wayland.
+with added CEF 149 support and a **Rust** tooling layer (no Python).
 
 ## Layout
 
 ```
-linux-wallpaperengine/        # the engine (Almamu fork) + my CEF tweaks, no build/ committed
+linux-wallpaperengine/        # the engine (Almamu fork) + CEF tweaks, no build/ committed
 ├── patches/
-│   └── cef-fixes.patch   # my engine tweaks as a single diff (against upstream b016d7d)
-├── tooling/         # my layer on top of the engine
-│   ├── lwe-index.py       # workshop indexer + gallery generator (incremental rescan)
-│   ├── lwe-daemon.py      # HTTP daemon (127.0.0.1:45127): /list /rescan /launch /stop
-│   ├── lwe-launch         # launch wallpapers on all monitors (Hyprland layer-shell)
-│   ├── lwe-select         # TUI picker via fzf
-│   ├── wallpapers.html    # web gallery (pulls data from the daemon)
-│   └── lwe-daemon.service # systemd --user unit
-├── desktop/        # Tauri 2 shell (ui/index.html + src-tauri Rust)
-├── Makefile         # install / uninstall / build-engine / patch-engine
+│   └── cef-fixes.patch   # engine tweaks as a single diff (against upstream b016d7d)
+├── tooling/              # thin shell helpers + browser gallery shell
+│   ├── lwe-launch        # launch wallpaper on all monitors (Hyprland layer-shell)
+│   ├── lwe-select        # TUI picker via fzf + jq
+│   ├── wallpapers.html   # browser gallery (talks to Rust daemon on :45127)
+│   └── lwe-daemon.service
+├── desktop/              # Tauri 2 GUI + Rust backend (index, engine, Steam UGC, HTTP daemon bins)
+│   ├── ui/index.html
+│   └── src-tauri/
+│       ├── src/index.rs          # workshop indexer (was lwe-index.py)
+│       ├── src/http_daemon.rs    # HTTP control API (was lwe-daemon.py)
+│       ├── src/engine.rs         # spawn/kill engine, monitors
+│       ├── src/steam.rs          # Steam Workshop UGC
+│       └── src/bin/
+│           ├── lwe_daemon.rs     # cargo bin → lwe-daemon
+│           └── lwe_index.rs      # cargo bin → lwe-index
+├── Makefile
 └── README.md
 ```
 
-## What my engine tweaks fix (patches/cef-fixes.patch)
+## What the engine tweaks fix (patches/cef-fixes.patch)
 
 Three bugs that broke web wallpapers on recent kernel/Mesa:
 
@@ -41,10 +48,15 @@ Three bugs that broke web wallpapers on recent kernel/Mesa:
 ## Installing the tooling
 
 ```bash
-make install          # copies scripts to ~/.local/bin, the gallery to ~,
-                      # the unit to ~/.config/systemd/user, and enables the daemon
-make uninstall        # removes everything installed
+make install          # cargo build --release lwe-daemon + lwe-index,
+                      # install to ~/.local/bin, gallery to ~/wallpapers.html,
+                      # systemd --user unit, enable daemon
+make uninstall        # removes installed scripts/unit (keeps gallery + cache)
+make build-tooling    # just cargo build the Rust bins
+make status
 ```
+
+Requires: `cargo`, `jq` (for `lwe-select`), `fzf` (for `lwe-select`), Hyprland/`hyprctl` for multi-monitor launch.
 
 ## Building the engine from source
 
@@ -53,59 +65,50 @@ make build-engine     # cmake + make in ./build (downloads CEF ~300M),
                       # then sudo make install into /opt/linux-wallpaperengine
 ```
 
-Build notes and known gotchas are kept in this README and the commit history
-(`patches/cef-fixes.patch` documents the CEF 149 changes).
+Build notes: see `patches/cef-fixes.patch` and commit history.
 
 ## Usage
 
-- Web gallery: `firefox file://~/wallpapers.html` (or `tooling/wallpapers.html`)
-  — search, filter by type, a Rescan button, and a NEW badge on newly added wallpapers.
-- TUI: `lwe-select`
-- Directly: `lwe-launch <workshop_id>`
-- New wallpapers from Steam are picked up automatically (the daemon re-scans the workshop every 45s).
+- **Desktop GUI (preferred):** `cd desktop && npm run tauri dev`
+- **Browser gallery:** `firefox file://~/wallpapers.html` (needs `lwe-daemon` on `:45127`)
+- **TUI:** `lwe-select`
+- **Direct:** `lwe-launch <workshop_id>`
+- **Index only:** `lwe-index --rescan` / `--rebuild` / `--list` / `--json`
+
+New Steam workshop downloads are picked up automatically (daemon auto-rescan every 45s).
 
 ## How it works
 
 Steam downloads wallpapers to `~/.local/share/Steam/steamapps/workshop/content/431960/<id>/`.
-`lwe-index.py` parses each folder's `project.json` → `~/.cache/lwe_index.json`.
-The daemon serves this index to the gallery and runs `lwe-launch` when you press Apply.
+`lwe-index` (Rust) parses each folder's `project.json` → `~/.cache/lwe_index.json`.
+`lwe-daemon` (Rust HTTP on `127.0.0.1:45127`) serves `/list /rescan /launch /stop /settings …`
+to the browser gallery. The Tauri app uses the **same Rust modules** via `invoke` (and can
+embed the HTTP server if the systemd unit is not already bound to the port).
 
 ## Desktop app (Tauri 2)
 
-A native GUI shell built on **Tauri 2** (Rust backend + webview frontend) that wraps
-the same index/daemon the CLI tooling uses, plus Steam Workshop integration.
-
-```
-desktop/
-  ui/index.html          # gallery frontend (vanilla JS + Tauri invoke)
-  src-tauri/             # Rust backend (ex-Python: daemon client + Steam UGC)
-    src/index.rs         # library index: load/save cache, remove_local()
-    src/steam.rs         # Steam Workshop UGC: subscribe / unsubscribe (purges local folder)
-    src/engine.rs        # launch wallpapers via the engine on all monitors
-    src/settings.rs      # persisted settings
-```
+Native GUI on **Tauri 2** (Rust backend + webview frontend) with Steam Workshop integration.
 
 ### Features
-- **Library browser** — grid of all installed wallpapers (incremental rescan every 45s),
-  search, type filters (scene/video/web), and a **NEW** badge on freshly added items.
-- **Favorites** — star any wallpaper; persisted in `localStorage`, survives restarts.
-- **Steam Workshop** — subscribe/unsubscribe from the Workshop directly in the GUI;
-  unsubscribing also purges the local folder and rewrites the index (`remove_local`).
-- **Launch** — applies a wallpaper on all monitors (Hyprland layer-shell) through the engine.
-- **Rescan** — forces the daemon to re-index the workshop.
+- **Library browser** — grid of installed wallpapers, search, type filters, **NEW** badge
+- **Favorites** — star any wallpaper; persisted in `localStorage`
+- **Steam Workshop** — subscribe/unsubscribe; unsubscribe purges the local folder (`remove_local`)
+- **Launch** — applies wallpaper on all monitors (Hyprland layer-shell)
+- **Rescan** — re-index workshop (same code path as `lwe-index --rescan`)
 
 ### Build & run
 ```bash
 cd desktop
 npm install
-npm run tauri dev        # dev build + launches the window
-# or build a packaged app:
-npm run tauri build      # produces a deb under src-tauri/target/release/bundle/
+npm run tauri dev        # dev build + window
+npm run tauri build      # deb under src-tauri/target/release/bundle/
 ```
 
-> Note: `libsteam_api.so` (from the Steamworks SDK) is required next to the binary at
-> build time. It is git-ignored (`*.so`) and copied into `target/debug/` automatically by
-> `src-tauri/build.rs`; the Steam client must be running for Workshop calls.
+> `libsteam_api.so` is required at build time (git-ignored `*.so`; staged by `build.rs`).
+> Steam client must be running for Workshop UGC calls.
 
-The Python tooling under `tooling/` still works standalone (daemon on `:45127`) — the
-desktop app talks to that same daemon, so you can mix and match.
+## No Python
+
+The old Python daemon/index (`lwe-daemon.py`, `lwe-index.py`) were removed.
+Everything is Rust (`desktop/src-tauri`) + thin bash helpers (`lwe-launch`, `lwe-select`).
+If you still have `~/.local/bin/lwe-*.py`, `make install` / `make uninstall` drops them.

@@ -471,7 +471,7 @@ pub async fn workshop_unsubscribe(
                 .map_err(|e| format!("purge join: {e}"))?
                 .map_err(|e| format!("purge local: {e}"))?;
             {
-                let mut g = app_state.items.lock().map_err(|e| e.to_string())?;
+                let mut g = app_state.inner.items.lock().map_err(|e| e.to_string())?;
                 g.retain(|w| w.id != published_file_id);
             }
             Ok(serde_json::json!({

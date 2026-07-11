@@ -1,11 +1,11 @@
 [Unit]
-Description=Wallpaper Engine control daemon (gallery <-> launcher)
+Description=Wallpaper Engine control daemon (Rust; gallery <-> launcher)
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/lwe-daemon.py
+ExecStart=%h/.local/bin/lwe-daemon
 Restart=on-failure
 RestartSec=2
 # wayland display is auto-resolved by the daemon from XDG_RUNTIME_DIR
