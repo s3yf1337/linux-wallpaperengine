@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Launch a wallpaper by workshop ID on the desktop (Wayland layer-shell).
+# Usage: lwe-launch <workshop_id> [engine flags...]
+# Env: LWE_FPS LWE_VOLUME LWE_SILENT=1 LWE_SCALING LWE_NO_FULLSCREEN_PAUSE=1
+#      LWE_DISABLE_MOUSE=1 LWE_NOAUTOMUTE=1
+set -euo pipefail
+
+ASSETS="$HOME/.local/share/Steam/steamapps/common/wallpaper_engine/assets"
+BIN="/opt/linux-wallpaperengine/linux-wallpaperengine"
+
+if [ ! -x "$BIN" ]; then
+  echo "binary not found: $BIN" >&2
+  exit 1
+fi
+
+ID="${1:?usage: lwe-launch <workshop_id> [extra args]}"
+shift || true
+
+if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  for cand in wayland-0 wayland-1; do
+    if [ -O "/run/user/$(id -u)/$cand" ]; then
+      export WAYLAND_DISPLAY="$cand"
+      break
+    fi
+  done
+fi
+
+GLOBAL=()
+if [ -n "${LWE_FPS:-}" ]; then GLOBAL+=(--fps "$LWE_FPS"); fi
+if [ "${LWE_SILENT:-0}" = "1" ]; then
+  GLOBAL+=(--silent)
+elif [ -n "${LWE_VOLUME:-}" ]; then
+  GLOBAL+=(--volume "$LWE_VOLUME")
+fi
+if [ "${LWE_NO_FULLSCREEN_PAUSE:-0}" = "1" ]; then GLOBAL+=(--no-fullscreen-pause); fi
+if [ "${LWE_DISABLE_MOUSE:-0}" = "1" ]; then GLOBAL+=(--disable-mouse); fi
+if [ "${LWE_NOAUTOMUTE:-0}" = "1" ]; then GLOBAL+=(--noautomute); fi
+
+has_screen=0; has_win=0
+for a in "$@"; do
+  case "$a" in
+    --screen-root*|--screen-span*) has_screen=1;;
+    --window*) has_win=1;;
+  esac
+done
+
+SCREEN_ARGS=()
+POS="$ID"
+if [ "$has_screen" = 0 ] && [ "$has_win" = 0 ]; then
+  MONS=()
+  if command -v hyprctl >/dev/null 2>&1; then
+    while IFS= read -r m; do [ -n "$m" ] && MONS+=("$m"); done < <(
+      hyprctl -j monitors 2>/dev/null | python3 -c "import sys,json;[print(x['name']) for x in json.load(sys.stdin)]" 2>/dev/null
+    )
+  fi
+  if [ ${#MONS[@]} -gt 0 ]; then
+    for mon in "${MONS[@]}"; do
+      SCREEN_ARGS+=(--screen-root "$mon" --bg "$ID")
+      # --scaling applies to previous --screen-root/--bg (engine docs)
+      if [ -n "${LWE_SCALING:-}" ]; then
+        SCREEN_ARGS+=(--scaling "$LWE_SCALING")
+      fi
+    done
+    POS=""
+  elif [ -n "${LWE_SCALING:-}" ]; then
+    # windowed / single default background
+    GLOBAL+=(--scaling "$LWE_SCALING")
+  fi
+elif [ -n "${LWE_SCALING:-}" ]; then
+  GLOBAL+=(--scaling "$LWE_SCALING")
+fi
+
+pkill -x linux-wallpaperengine 2>/dev/null || true
+sleep 0.5
+
+if [ -n "$POS" ]; then
+  exec "$BIN" --assets-dir "$ASSETS" "${GLOBAL[@]}" "${SCREEN_ARGS[@]}" "$@" "$POS"
+else
+  exec "$BIN" --assets-dir "$ASSETS" "${GLOBAL[@]}" "${SCREEN_ARGS[@]}" "$@"
+fi

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# TUI wallpaper picker backed by ~/.cache/lwe_index.json (built by lwe-index.py).
+# Fuzzy-search by title/type/tags/id, Enter launches on the desktop.
+# Forces bash for fzf preview even when the user's $SHELL is fish.
+set -euo pipefail
+
+INDEX="$HOME/.cache/lwe_index.json"
+[ -f "$INDEX" ] || lwe-index.py --rebuild >/dev/null
+
+# fzf uses $SHELL to run --preview scripts; force bash so our sh syntax works
+# under fish/zsh etc.
+export SHELL=/bin/bash
+
+pick=$(python3 - "$INDEX" <<'PY'
+import json, sys, subprocess
+items = json.load(open(sys.argv[1]))
+lines = [f"{it['title']} [{it['type']}] {it['id']}" for it in items]
+inp = "\n".join(lines)
+try:
+    out = subprocess.run(
+        ["fzf", "--with-nth", "1",
+         "--preview-window", "right:40%:wrap",
+         "--preview",
+         r'''id=$(echo {} | grep -oE '[0-9]+$'); d="$HOME/.local/share/Steam/steamapps/workshop/content/431960/$id"; pj="$d/project.json"; prev="$d/preview.jpg"; [ -f "$prev" ] && echo "file://$prev"; echo; sed -n "1,16p" "$pj"''',
+         "--prompt", "wallpaper> "],
+        input=inp, capture_output=True, text=True).stdout.strip()
+except Exception:
+    out = ""
+print(out)
+PY
+)
+
+[ -z "$pick" ] && { echo "cancelled"; exit 0; }
+id="${pick##* }"
+echo "launching $id ..."
+exec lwe-launch "$id"

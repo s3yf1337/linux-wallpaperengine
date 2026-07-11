@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Wallpaper Engine Linux",
+  "version": "0.1.0",
+  "identifier": "dev.wpengine.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Wallpaper Engine \u2014 Linux",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 560,
+        "resizable": true,
+        "decorations": false,
+        "center": true,
+        "backgroundColor": [
+          18,
+          18,
+          20,
+          255
+        ],
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://asset.localhost https://steamuserimages-a.akamaihd.net https://community.cloudflare.steamstatic.com https://cdn.akamai.steamstatic.com https://cdn.cloudflare.steamstatic.com data: blob: file:; connect-src 'self' ipc: http://ipc.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/.local/share/Steam/steamapps/workshop/content/431960/**",
+          "$HOME/.steam/steam/steamapps/workshop/content/431960/**",
+          "$HOME/.cache/lwe_thumbs/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "deb",
+    "resources": [
+      "steam_appid.txt",
+      "steamworks-sys/lib/steam/redistributable_bin/linux64/libsteam_api.so"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  }
+}

@@ -46,7 +46,7 @@ set(KISSFFT_TOOLS OFF)
 
 # Download CEF of specified version for current platform
 # Specify the CEF distribution version.
-set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
+set(CEF_VERSION "149.0.6+g0d0eeb6+chromium-149.0.7827.201")
 # CEF_DISTRIBUTION_TYPE default value should be different based on the type of build
 # debug builds should use standard versions
 # while release version can do with the minimal version

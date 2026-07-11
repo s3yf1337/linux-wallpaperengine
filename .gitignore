@@ -11,3 +11,8 @@ packaging/archlinux/*
 *-protocol.c
 *-protocol.h
 AGENTS.md
+# wpengine additions
+*.so
+*.a
+*.o
+.DS_Store

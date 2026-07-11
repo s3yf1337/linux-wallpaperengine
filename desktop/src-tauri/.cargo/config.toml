@@ -1,0 +1,3 @@
+# rpath so the binary finds libsteam_api.so next to it ($ORIGIN) without LD_LIBRARY_PATH.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]

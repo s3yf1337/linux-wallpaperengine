@@ -1,0 +1,45 @@
+[package]
+name = "wpengine"
+version = "0.1.0"
+description = "Wallpaper Engine Linux desktop UI (Tauri 2)"
+authors = ["seyf"]
+edition = "2021"
+
+[lib]
+name = "wpengine_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "time", "sync", "fs", "io-util", "rt-multi-thread", "macros"] }
+dirs = "5"
+walkdir = "2"
+thiserror = "1"
+nix = { version = "0.29", features = ["signal", "process", "user"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+steamworks = { version = "0.13", features = ["serde"] }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"   # size; use 3 if you care more about IPC microbench than binary size
+strip = true
+# debug = false is default; keep release lean
+
+# Faster `tauri dev` / incremental debug builds (default is fine; this trims a bit of link time noise).
+[profile.dev]
+debug = 1          # line tables only — smaller target/, still debuggable
+incremental = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# default-features pulls soup/javascriptcore glue we need for WebView settings (HA policy).
+webkit2gtk = { version = "2.0.1", default-features = true }
+

@@ -1,0 +1,15 @@
+[Unit]
+Description=Wallpaper Engine control daemon (gallery <-> launcher)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/lwe-daemon.py
+Restart=on-failure
+RestartSec=2
+# wayland display is auto-resolved by the daemon from XDG_RUNTIME_DIR
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target

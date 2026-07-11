@@ -44,9 +44,7 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
 	this->m_contents = this->m_assetLoader.read (file);
 	callback->Continue ();
     } catch (AssetLoadException&) {
-#if !NDEBUG
-	std::cout << "Cannot read file " << file << std::endl;
-#endif
+	std::cerr << "[LWE-WEB] scheme CANNOT READ file=" << file << std::endl;
     }
 
     handle_request = true;

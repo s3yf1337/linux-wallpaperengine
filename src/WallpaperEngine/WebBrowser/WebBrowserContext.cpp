@@ -76,10 +76,19 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
     // Configurate Chromium
     CefSettings settings;
     std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
-    // CefString(&settings.locales_dir_path) = "OffScreenCEF/godot/locales";
-    // CefString(&settings.resources_dir_path) = "OffScreenCEF/godot/";
-    // CefString(&settings.framework_dir_path) = "OffScreenCEF/godot/";
-    // CefString(&settings.cache_path) = "OffScreenCEF/godot/";
+    // CEF >= 149 no longer auto-resolves its resource bundle (icudtl.dat, *.pak,
+    // locales/) from the executable directory reliably, which makes CefInitialize
+    // abort with "Invalid file descriptor to ICU data received". Point CEF at the
+    // directory that holds libcef.so / icudtl.dat explicitly. That directory is the
+    // one containing this executable (the CEF runtime files are copied next to it).
+    std::error_code exeEc;
+    std::filesystem::path exeDir = std::filesystem::canonical ("/proc/self/exe", exeEc).parent_path ();
+    if (!exeEc) {
+	const std::string resourcesDir = exeDir.string ();
+	const std::string localesDir = (exeDir / "locales").string ();
+	cef_string_utf8_to_utf16 (resourcesDir.c_str (), resourcesDir.length (), &settings.resources_dir_path);
+	cef_string_utf8_to_utf16 (localesDir.c_str (), localesDir.length (), &settings.locales_dir_path);
+    }
     //  CefString(&settings.browser_subprocess_path) = "path/to/client"
     cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;

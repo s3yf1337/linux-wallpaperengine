@@ -1,0 +1,154 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 11565a1..35e336a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -46,7 +46,7 @@ set(KISSFFT_TOOLS OFF)
+ 
+ # Download CEF of specified version for current platform
+ # Specify the CEF distribution version.
+-set(CEF_VERSION "135.0.17+gcbc1c5b+chromium-135.0.7049.52")
++set(CEF_VERSION "149.0.6+g0d0eeb6+chromium-149.0.7827.201")
+ # CEF_DISTRIBUTION_TYPE default value should be different based on the type of build
+ # debug builds should use standard versions
+ # while release version can do with the minimal version
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
+index 14618ce..39e992b 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
+@@ -1,7 +1,42 @@
+ #include "BrowserClient.h"
++#include <iostream>
+ 
+ using namespace WallpaperEngine::WebBrowser::CEF;
+ 
+ BrowserClient::BrowserClient (CefRefPtr<CefRenderHandler> ptr) : m_renderHandler (std::move (ptr)) { }
+ 
+-CefRefPtr<CefRenderHandler> BrowserClient::GetRenderHandler () { return m_renderHandler; }
+\ No newline at end of file
++CefRefPtr<CefRenderHandler> BrowserClient::GetRenderHandler () { return m_renderHandler; }
++CefRefPtr<CefLoadHandler> BrowserClient::GetLoadHandler () { return this; }
++CefRefPtr<CefDisplayHandler> BrowserClient::GetDisplayHandler () { return this; }
++
++void BrowserClient::OnLoadError (
++    CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode,
++    const CefString& errorText, const CefString& failedUrl
++) {
++    // ERR_ABORTED (-3) is fired for normal navigations that get superseded; ignore it.
++    if (errorCode == ERR_ABORTED) {
++	return;
++    }
++    std::cerr << "[LWE-WEB] OnLoadError code=" << errorCode << " text=" << errorText.ToString ()
++              << " url=" << failedUrl.ToString () << std::endl;
++}
++
++void BrowserClient::OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
++    // only report non-success loads of the main frame
++    if (frame->IsMain () && httpStatusCode != 200 && httpStatusCode != 0) {
++	std::cerr << "[LWE-WEB] main frame loaded with http=" << httpStatusCode << " url="
++	          << frame->GetURL ().ToString () << std::endl;
++    }
++}
++
++bool BrowserClient::OnConsoleMessage (
++    CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message, const CefString& source,
++    int line
++) {
++    // only surface actual JS errors, not warnings/logs (keeps output clean)
++    if (level >= LOGSEVERITY_ERROR) {
++	std::cerr << "[LWE-WEB] JS error: " << message.ToString () << " (" << source.ToString () << ":" << line
++	          << ")" << std::endl;
++    }
++    return false;
++}
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
+index 499bb73..e89e240 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
++++ b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
+@@ -7,14 +7,29 @@ namespace WallpaperEngine::WebBrowser::CEF {
+ //! \brief Provide access to browser-instance-specific callbacks. A single
+ //! CefClient instance can be shared among any number of browsers.
+ // *************************************************************************
+-class BrowserClient : public CefClient {
++class BrowserClient : public CefClient, public CefLoadHandler, public CefDisplayHandler {
+ public:
+     explicit BrowserClient (CefRefPtr<CefRenderHandler> ptr);
+ 
+     [[nodiscard]] CefRefPtr<CefRenderHandler> GetRenderHandler () override;
++    [[nodiscard]] CefRefPtr<CefLoadHandler> GetLoadHandler () override;
++    [[nodiscard]] CefRefPtr<CefDisplayHandler> GetDisplayHandler () override;
++
++    // CefLoadHandler
++    void OnLoadError (
++        CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, ErrorCode errorCode,
++        const CefString& errorText, const CefString& failedUrl
++    ) override;
++    void OnLoadEnd (CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) override;
++
++    // CefDisplayHandler
++    bool OnConsoleMessage (
++        CefRefPtr<CefBrowser> browser, cef_log_severity_t level, const CefString& message,
++        const CefString& source, int line
++    ) override;
+ 
+     CefRefPtr<CefRenderHandler> m_renderHandler = nullptr;
+ 
+     IMPLEMENT_REFCOUNTING (BrowserClient);
+ };
+-} // namespace WallpaperEngine::WebBrowser::CEF
+\ No newline at end of file
++} // namespace WallpaperEngine::WebBrowser::CEF
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp b/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
+index fc31baa..72e9784 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
+@@ -24,4 +24,4 @@ int RenderHandler::getWidth () const { return this->m_webdata->getWidth (); }
+ 
+ int RenderHandler::getHeight () const { return this->m_webdata->getHeight (); }
+ 
+-GLuint RenderHandler::texture () const { return this->m_webdata->getWallpaperFramebuffer (); }
+\ No newline at end of file
++GLuint RenderHandler::texture () const { return this->m_webdata->getWallpaperTexture (); }
+\ No newline at end of file
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+index 8f29be8..0668101 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+@@ -44,9 +44,7 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
+ 	this->m_contents = this->m_assetLoader.read (file);
+ 	callback->Continue ();
+     } catch (AssetLoadException&) {
+-#if !NDEBUG
+-	std::cout << "Cannot read file " << file << std::endl;
+-#endif
++	std::cerr << "[LWE-WEB] scheme CANNOT READ file=" << file << std::endl;
+     }
+ 
+     handle_request = true;
+diff --git a/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp b/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
+index 1b2da22..0ab0eec 100644
+--- a/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
++++ b/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
+@@ -76,10 +76,19 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
+     // Configurate Chromium
+     CefSettings settings;
+     std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
+-    // CefString(&settings.locales_dir_path) = "OffScreenCEF/godot/locales";
+-    // CefString(&settings.resources_dir_path) = "OffScreenCEF/godot/";
+-    // CefString(&settings.framework_dir_path) = "OffScreenCEF/godot/";
+-    // CefString(&settings.cache_path) = "OffScreenCEF/godot/";
++    // CEF >= 149 no longer auto-resolves its resource bundle (icudtl.dat, *.pak,
++    // locales/) from the executable directory reliably, which makes CefInitialize
++    // abort with "Invalid file descriptor to ICU data received". Point CEF at the
++    // directory that holds libcef.so / icudtl.dat explicitly. That directory is the
++    // one containing this executable (the CEF runtime files are copied next to it).
++    std::error_code exeEc;
++    std::filesystem::path exeDir = std::filesystem::canonical ("/proc/self/exe", exeEc).parent_path ();
++    if (!exeEc) {
++	const std::string resourcesDir = exeDir.string ();
++	const std::string localesDir = (exeDir / "locales").string ();
++	cef_string_utf8_to_utf16 (resourcesDir.c_str (), resourcesDir.length (), &settings.resources_dir_path);
++	cef_string_utf8_to_utf16 (localesDir.c_str (), localesDir.length (), &settings.locales_dir_path);
++    }
+     //  CefString(&settings.browser_subprocess_path) = "path/to/client"
+     cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
+     settings.windowless_rendering_enabled = true;
