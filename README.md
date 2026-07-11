@@ -72,16 +72,40 @@ The daemon serves this index to the gallery and runs `lwe-launch` when you press
 
 ## Desktop app (Tauri 2)
 
+A native GUI shell built on **Tauri 2** (Rust backend + webview frontend) that wraps
+the same index/daemon the CLI tooling uses, plus Steam Workshop integration.
+
 ```
-desktop/                 # Tauri 2 shell
-  ui/index.html          # gallery (invoke)
-  src-tauri/             # Rust orchestration (ex-Python)
+desktop/
+  ui/index.html          # gallery frontend (vanilla JS + Tauri invoke)
+  src-tauri/             # Rust backend (ex-Python: daemon client + Steam UGC)
+    src/index.rs         # library index: load/save cache, remove_local()
+    src/steam.rs         # Steam Workshop UGC: subscribe / unsubscribe (purges local folder)
+    src/engine.rs        # launch wallpapers via the engine on all monitors
+    src/settings.rs      # persisted settings
 ```
 
+### Features
+- **Library browser** — grid of all installed wallpapers (incremental rescan every 45s),
+  search, type filters (scene/video/web), and a **NEW** badge on freshly added items.
+- **Favorites** — star any wallpaper; persisted in `localStorage`, survives restarts.
+- **Steam Workshop** — subscribe/unsubscribe from the Workshop directly in the GUI;
+  unsubscribing also purges the local folder and rewrites the index (`remove_local`).
+- **Launch** — applies a wallpaper on all monitors (Hyprland layer-shell) through the engine.
+- **Rescan** — forces the daemon to re-index the workshop.
+
+### Build & run
 ```bash
-cd desktop && cargo tauri dev
-# or
-./desktop/src-tauri/target/debug/wpengine
+cd desktop
+npm install
+npm run tauri dev        # dev build + launches the window
+# or build a packaged app:
+npm run tauri build      # produces a deb under src-tauri/target/release/bundle/
 ```
 
-Python tooling under `tooling/` still works standalone (daemon on :45127).
+> Note: `libsteam_api.so` (from the Steamworks SDK) is required next to the binary at
+> build time. It is git-ignored (`*.so`) and copied into `target/debug/` automatically by
+> `src-tauri/build.rs`; the Steam client must be running for Workshop calls.
+
+The Python tooling under `tooling/` still works standalone (daemon on `:45127`) — the
+desktop app talks to that same daemon, so you can mix and match.
