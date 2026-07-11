@@ -431,10 +431,12 @@ pub async fn workshop_subscribe(
     Ok(serde_json::json!({ "ok": true, "id": published_file_id }))
 }
 
-/// `workshop_unsubscribe` — unsubscribe; Steam may free disk content.
+/// `workshop_unsubscribe` — unsubscribe via Steam, then delete local workshop folder + purge library cache.
+/// Steam alone often leaves content on disk (esp. without official WE), so rescan would re-add it.
 #[tauri::command]
 pub async fn workshop_unsubscribe(
     state: tauri::State<'_, SteamState>,
+    app_state: tauri::State<'_, crate::AppState>,
     published_file_id: String,
 ) -> Result<serde_json::Value, String> {
     let client = {
@@ -462,7 +464,24 @@ pub async fn workshop_unsubscribe(
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
     match result {
-        Ok(()) => Ok(serde_json::json!({ "ok": true })),
+        Ok(()) => {
+            let id = published_file_id.clone();
+            let purge = tokio::task::spawn_blocking(move || crate::index::remove_local(&id))
+                .await
+                .map_err(|e| format!("purge join: {e}"))?
+                .map_err(|e| format!("purge local: {e}"))?;
+            {
+                let mut g = app_state.items.lock().map_err(|e| e.to_string())?;
+                g.retain(|w| w.id != published_file_id);
+            }
+            Ok(serde_json::json!({
+                "ok": true,
+                "id": published_file_id,
+                "disk_deleted": purge.disk_deleted,
+                "cache_removed": purge.cache_removed,
+                "count": purge.count,
+            }))
+        }
         Err(e) => Err(format!("unsubscribe: {e}")),
     }
 }

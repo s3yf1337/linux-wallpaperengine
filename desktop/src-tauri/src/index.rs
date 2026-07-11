@@ -533,3 +533,95 @@ pub fn rebuild() -> Vec<Wallpaper> {
     save_cache(&mut items);
     items
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoveLocalResult {
+    pub id: String,
+    pub disk_deleted: bool,
+    pub cache_removed: bool,
+    pub count: usize,
+}
+
+/// Permanently drop a workshop wallpaper from the local library.
+/// Deletes `workshop/content/431960/<id>` (if present) + thumb cache entry, then rewrites index cache.
+/// `id` must be digits-only (workshop published file id).
+pub fn remove_local(id: &str) -> Result<RemoveLocalResult, String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err("invalid workshop id".into());
+    }
+    let ws = workshop_dir();
+    let dir = ws.join(id);
+    let mut disk_deleted = false;
+
+    if dir.exists() {
+        // Refuse path escape: resolved dir must stay under workshop root.
+        let ws_abs = fs::canonicalize(&ws).map_err(|e| format!("workshop dir: {e}"))?;
+        let dir_abs = fs::canonicalize(&dir).map_err(|e| format!("item dir: {e}"))?;
+        if !dir_abs.starts_with(&ws_abs) {
+            return Err("refusing to delete path outside workshop content".into());
+        }
+        if dir_abs == ws_abs {
+            return Err("refusing to delete workshop root".into());
+        }
+        fs::remove_dir_all(&dir_abs).map_err(|e| format!("delete {id}: {e}"))?;
+        disk_deleted = true;
+        eprintln!("[lwe] remove_local deleted {}", dir_abs.display());
+    }
+
+    // Drop cached grid thumb if any
+    let thumb = thumbs_dir().join(format!("{id}.jpg"));
+    if thumb.is_file() {
+        let _ = fs::remove_file(&thumb);
+    }
+
+    let mut items = load_cache();
+    let before = items.len();
+    items.retain(|w| w.id != id);
+    let cache_removed = before != items.len();
+    save_cache(&mut items);
+
+    Ok(RemoveLocalResult {
+        id: id.to_string(),
+        disk_deleted,
+        cache_removed,
+        count: items.len(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remove_local_rejects_bad_id() {
+        assert!(remove_local("").is_err());
+        assert!(remove_local("abc").is_err());
+        assert!(remove_local("../431960").is_err());
+        assert!(remove_local("12ab").is_err());
+    }
+
+    #[test]
+    fn remove_local_missing_is_ok() {
+        let r = remove_local("999000000000099").expect("missing should succeed");
+        assert!(!r.disk_deleted);
+        assert_eq!(r.id, "999000000000099");
+    }
+
+    #[test]
+    fn remove_local_deletes_dummy_folder() {
+        let id = "999000000000042";
+        let dir = workshop_dir().join(id);
+        if !workshop_dir().is_dir() {
+            eprintln!("skip: workshop dir missing");
+            return;
+        }
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("mkdir dummy");
+        fs::write(dir.join("project.json"), r#"{"title":"lwe-purge-test-dummy"}"#)
+            .expect("write project");
+        assert!(dir.is_dir());
+        let r = remove_local(id).expect("purge dummy");
+        assert!(r.disk_deleted, "expected disk_deleted=true");
+        assert!(!dir.exists(), "dummy folder must be gone");
+    }
+}

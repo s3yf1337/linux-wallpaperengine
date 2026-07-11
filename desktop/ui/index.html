@@ -346,8 +346,11 @@
   .mrow .v{ color:var(--text); font-size:11px; margin-left:auto; text-align:right; font-family:ui-monospace,"SFMono-Regular",Menlo,monospace; max-width:62%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .mrow .v.wrap{ white-space:normal; overflow:visible; text-overflow:clip; word-break:break-word; }
 
-  .det-actions{ display:flex; gap:8px; margin-top:16px; }
-  .det-actions .btn-accent{ flex:1; justify-content:center; }
+  .det-actions{ display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+  .det-actions .btn{ justify-content:center; width:100%; }
+  .det-actions .btn-accent{ flex:none; }
+  .det-actions-row{ display:flex; gap:8px; }
+  .det-actions-row .btn{ flex:1; min-width:0; width:auto; }
 
   .set-group{ margin-top:18px; border-top:1px solid var(--border); padding-top:13px; }
   .set-label{ font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); margin-bottom:12px; }
@@ -451,6 +454,33 @@
     position:absolute; left:0; bottom:0; height:3px; background:var(--accent);
     transition:width .2s ease; width:0;
   }
+
+  /* library favorites — small star, app-style (surface/border/accent) */
+  .fav-btn{
+    position:absolute; bottom:6px; right:6px; z-index:2;
+    width:22px; height:22px; padding:0;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(18,18,20,.82); border:1px solid var(--border);
+    color:var(--dim); cursor:pointer;
+    transition:color .12s, border-color .12s, background .12s;
+  }
+  .fav-btn:hover{ color:var(--accent); border-color:var(--accent); background:var(--soft); }
+  .fav-btn.on{ color:var(--accent); border-color:var(--accent); }
+  .fav-btn.on .i{ fill:var(--accent); stroke:var(--accent); }
+  .fav-btn .i{ width:12px; height:12px; }
+  .card.favorited{ border-color:#5a3a20; }
+  .card.favorited:hover, .card.favorited.selected{ border-color:var(--accent); }
+  .det-fav{
+    width:28px; height:28px; flex:0 0 auto; padding:0;
+    display:inline-flex; align-items:center; justify-content:center;
+    background:transparent; border:1px solid var(--border); color:var(--dim); cursor:pointer;
+    transition:color .12s, border-color .12s, background .12s;
+  }
+  .det-fav:hover{ color:var(--accent); border-color:var(--accent); background:var(--soft); }
+  .det-fav.on{ color:var(--accent); border-color:var(--accent); background:var(--soft); }
+  .det-fav.on .i{ fill:var(--accent); stroke:var(--accent); }
+  .det-title-row{ display:flex; align-items:flex-start; gap:8px; }
+  .det-title-row .det-title{ flex:1; min-width:0; }
 
   /* toast */
   .toast-stack{ position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:100; display:flex; flex-direction:column; gap:6px; pointer-events:none; }
@@ -597,7 +627,8 @@ const P = {
   list:'<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
   panel:'<rect x="3" y="4" width="18" height="16"/><line x1="9" y1="4" x2="9" y2="20"/>',
   panelR:'<rect x="3" y="4" width="18" height="16"/><line x1="15" y1="4" x2="15" y2="20"/>',
-  info:'<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
+  info:'<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  star:'<polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26"/>'
 };
 function svg(name, cls){ return '<svg class="i '+(cls||'')+'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'+(P[name]||'')+'</svg>'; }
 function typeIcon(t){ return t==='scene'?svg('layers','i-sm'):t==='video'?svg('play','i-sm'):svg('globe','i-sm'); }
@@ -687,7 +718,30 @@ const state = {
   wsCurrentId: null,        // currently launched wallpaper id (shared with library)
   wsProgress: {},            // id -> {current,total,done,state}
   wsInstalled: {},           // id -> folder path (post-install)
+  favorites: new Set(),      // library wallpaper ids (persisted in localStorage)
 };
+
+const FAV_KEY = 'lwe.favorites';
+function loadFavorites(){
+  try{
+    const raw = localStorage.getItem(FAV_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set((Array.isArray(arr) ? arr : []).map(String));
+  }catch(_){ return new Set(); }
+}
+function saveFavorites(){
+  try{ localStorage.setItem(FAV_KEY, JSON.stringify([...state.favorites])); }catch(_){}
+}
+function isFavorite(id){ return state.favorites.has(String(id)); }
+function toggleFavorite(id){
+  if(id==null || id==='') return false;
+  const k = String(id);
+  if(state.favorites.has(k)) state.favorites.delete(k);
+  else state.favorites.add(k);
+  saveFavorites();
+  return state.favorites.has(k);
+}
+state.favorites = loadFavorites();
 
 // Source-of-truth getter: tab-aware items + selection.
 function curItems(){ return state.tab==='workshop' ? state.wsItems : state.items; }
@@ -825,11 +879,16 @@ function cardHTML(w){
     if(prog && !prog.done && prog.total){ const pct = Math.max(0, Math.min(100, Math.round(100*prog.current/prog.total))); wsProg = '<div class="ws-progress" style="width:'+pct+'%"></div>'; }
   }
   const selId = state.tab==='workshop' ? state.wsSelectedId : state.selectedId;
-  return '<div class="card'+(selId===w.id?' selected':'')+(isRun?' active-run':'')+'" role="button" tabindex="0" data-id="'+esc(w.id)+'">'
+  const fav = state.tab==='library' && isFavorite(w.id);
+  const favBtn = state.tab==='library'
+    ? '<button type="button" class="fav-btn'+(fav?' on':'')+'" data-fav="'+esc(w.id)+'" title="'+(fav?'Remove from favorites':'Add to favorites')+'" aria-label="Favorite">'+svg('star')+'</button>'
+    : '';
+  return '<div class="card'+(selId===w.id?' selected':'')+(isRun?' active-run':'')+(fav?' favorited':'')+'" role="button" tabindex="0" data-id="'+esc(w.id)+'">'
     + '<div class="preview">'+img
     + '<span class="type-tag">'+typeIcon(w.type)+esc(w.type)+'</span>'
     + (isNew ? '<span class="badge-new">NEW</span>' : '')
     + wsBadge
+    + favBtn
     + '<span class="sel-dot">'+svg('check')+'</span></div>'
     + '<div class="card-body">'
     +   '<div class="card-name" title="'+esc(w.title)+'">'+esc(w.title)+'</div>'
@@ -864,6 +923,14 @@ function applyFilters(){
     }
     return true;
   });
+  // Library favorites first (stable sort keeps relative order within groups)
+  if(state.tab==='library' && state.favorites.size){
+    list.sort((a,b)=>{
+      const af = isFavorite(a.id) ? 0 : 1;
+      const bf = isFavorite(b.id) ? 0 : 1;
+      return af - bf;
+    });
+  }
   renderGrid(list);
   const total = state.tab==='workshop' ? (state.wsTotal || items.length) : items.length;
   counter.innerHTML = '<b>'+list.length+'</b> / '+total;
@@ -969,17 +1036,32 @@ function renderDetail(w){
   let actions;
   if(state.tab==='workshop'){
     const subd = w.subscribed, inst = w.installed;
-    const subBtn = subd
-      ? '<button class="btn magnetic" id="btnUnsub" data-id="'+esc(w.id)+'">'+svg('x','i-sm')+'Unsubscribe</button>'
-      : '<button class="btn btn-accent magnetic" id="btnSubscribe" data-id="'+esc(w.id)+'">'+svg('sliders')+'Subscribe</button>';
+    // primary CTA full-width; secondary (unsub) underneath when subscribed
     const applyBtn = inst
       ? '<button class="btn btn-accent magnetic" id="btnApply" data-id="'+esc(w.id)+'">'+svg('play')+'Apply</button>'
       : '<button class="btn magnetic" id="btnApply" data-id="'+esc(w.id)+'" disabled title="Download first">'+svg('play')+'Apply</button>';
-    actions = subBtn + applyBtn;
+    if(subd){
+      actions = applyBtn
+        + '<div class="det-actions-row">'
+        +   '<button class="btn magnetic" id="btnUnsub" data-id="'+esc(w.id)+'">'+svg('x','i-sm')+'Unsubscribe</button>'
+        + '</div>';
+    } else {
+      actions = '<button class="btn btn-accent magnetic" id="btnSubscribe" data-id="'+esc(w.id)+'">'+svg('sliders')+'Subscribe</button>'
+              + applyBtn;
+    }
   } else {
+    // Library: Apply full-width primary; secondary row Open | Unsubscribe (steam)
+    const openBtn = '<button class="btn magnetic" id="btnOpen" data-id="'+esc(w.id)+'" title="Open folder">'+svg('folder','i-sm')+'Open folder</button>';
+    const unsubBtn = state.steamOn
+      ? '<button class="btn magnetic" id="btnUnsub" data-id="'+esc(w.id)+'" title="Unsubscribe via Steam">'+svg('x','i-sm')+'Unsubscribe</button>'
+      : '';
     actions = '<button class="btn btn-accent magnetic" id="btnApply" data-id="'+esc(w.id)+'">'+svg('play')+'Apply</button>'
-            + '<button class="btn magnetic" id="btnOpen" data-id="'+esc(w.id)+'" title="Open folder">'+svg('folder','i-sm')+'Open folder</button>';
+            + '<div class="det-actions-row">'+openBtn+unsubBtn+'</div>';
   }
+  const fav = state.tab==='library' && isFavorite(w.id);
+  const favBtn = state.tab==='library'
+    ? '<button type="button" class="det-fav'+(fav?' on':'')+'" id="btnFav" data-id="'+esc(w.id)+'" title="'+(fav?'Remove from favorites':'Add to favorites')+'" aria-label="Favorite">'+svg('star')+'</button>'
+    : '';
   detailInner.innerHTML =
     '<div class="det-head"><span class="det-head-t">Selected wallpaper</span>'
     + '<button class="tbtn" id="detClose" title="Hide panel">'+svg('x')+'</button></div>'
@@ -987,7 +1069,7 @@ function renderDetail(w){
     +   '<div class="det-preview">'+prev
     +     '<span class="type-tag lg">'+typeIcon(w.type)+esc(w.type)+'</span></div>'
     +   '<div class="det-body">'
-    +     '<div class="det-title">'+esc(w.title)+'</div>'
+    +     '<div class="det-title-row"><div class="det-title">'+esc(w.title)+'</div>'+favBtn+'</div>'
     +     '<div class="det-id">id '+esc(w.id)+' · '+esc(w.type)+'</div>'
     +     '<div class="det-meta">'
     +       '<div class="mrow"><span class="k">'+svg('folder','i-sm')+'Path</span><span class="v wrap" title="'+esc(dir)+'">'+esc(dir||'—')+'</span></div>' 
@@ -1134,6 +1216,7 @@ async function toggleSteamMode(on){
     tabWorkshop.classList.add('disabled');
     state.wsItems = []; state.wsSelectedId = null; state.wsProgress = {}; state.wsInstalled = {};
     if(state.tab==='workshop') setTab('library');
+    else if(state.tab==='library' && state.selectedId) renderDetail(findCurItem(state.selectedId));
     toast('Steam Mode off');
   }
 }
@@ -1216,7 +1299,34 @@ async function workshopUnsubscribe(id){
   setStatus('unsubscribing…');
   try{
     const j = await apiWorkshopUnsubscribe(id);
-    if(j.ok){ setStatus('unsubscribed'); const w = state.wsItems.find(x=>x.id===id); if(w){ w.subscribed=false; w.installed=false; } applyFilters(); renderDetail(findCurItem(id)); }
+    if(j.ok){
+      setStatus(j.disk_deleted ? 'unsubscribed · deleted local files' : 'unsubscribed', 'ok');
+      const w = state.wsItems.find(x=>String(x.id)===String(id));
+      if(w){ w.subscribed=false; w.installed=false; w.dir=''; }
+      // Backend purged Steam sub + disk folder + index cache; sync frontend
+      state.items = state.items.filter(x=>String(x.id)!==String(id));
+      state.favorites.delete(String(id));
+      saveFavorites();
+      if(String(state.currentId)===String(id)){
+        state.currentId = null;
+        try{ await apiStop(); }catch(_){}
+      }
+      if(String(state.selectedId)===String(id)) state.selectedId = null;
+      if(String(state.wsSelectedId)===String(id)) state.wsSelectedId = null;
+      renderSidebar();
+      applyFilters();
+      if(state.tab==='workshop'){
+        renderDetail(findCurItem(id));
+      } else {
+        const next = state.selectedId || (state.items[0] && state.items[0].id) || null;
+        if(next) selectWallpaper(next);
+        else renderDetail(null);
+      }
+      const bits = ['Unsubscribed'];
+      if(j.disk_deleted) bits.push('files deleted');
+      else bits.push('no local folder');
+      toast(bits.join(' · '), 'ok');
+    }
     else setStatus('err: '+(j.error||'failed'), 'err');
   } catch(e){ setStatus('err: '+e.message, 'err'); }
 }
@@ -1290,6 +1400,8 @@ function listenWorkshop(){
     steamToggle.setAttribute('aria-checked', state.steamOn ? 'true' : 'false');
     tabWorkshop.classList.toggle('disabled', !state.steamOn);
     if(!state.steamOn && state.tab==='workshop') setTab('library');
+    // Refresh Library detail so Unsubscribe button appears/disappears with Steam Mode
+    else if(state.tab==='library' && state.selectedId) renderDetail(findCurItem(state.selectedId));
   });
   return true;
 }
@@ -1398,6 +1510,15 @@ searchSide.addEventListener('input', ()=>doSearchDebounced(searchSide.value));
 
 gridWrap.addEventListener('click', e=>{
   if(e.target.closest('#clearAll')){ resetFilters(); return; }
+  const favBtn = e.target.closest('.fav-btn');
+  if(favBtn){
+    e.preventDefault(); e.stopPropagation();
+    const id = favBtn.dataset.fav;
+    toggleFavorite(id);
+    applyFilters();
+    if(String(state.selectedId)===String(id)) renderDetail(findCurItem(id));
+    return;
+  }
   const card = e.target.closest('.card'); if(!card) return;
   const id = card.dataset.id;
   selectWallpaper(curSelectedId()===id ? null : id);
@@ -1409,6 +1530,13 @@ gridWrap.addEventListener('keydown', e=>{
 
 detailInner.addEventListener('click', e=>{
   if(e.target.closest('#detClose')){ detail.classList.add('collapsed'); return; }
+  if(e.target.closest('#btnFav')){
+    const id = e.target.closest('#btnFav').dataset.id;
+    toggleFavorite(id);
+    applyFilters();
+    renderDetail(findCurItem(id));
+    return;
+  }
   if(e.target.closest('#btnApply')){ state.settings = readPanelSettings(); applyWallpaper(e.target.closest('#btnApply').dataset.id); return; }
   if(e.target.closest('#btnOpen')){ openFolder(e.target.closest('#btnOpen').dataset.id); return; }
   if(e.target.closest('#btnSubscribe')){ workshopSubscribe(e.target.closest('#btnSubscribe').dataset.id); return; }
