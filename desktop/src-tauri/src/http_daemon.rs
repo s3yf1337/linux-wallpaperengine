@@ -352,22 +352,41 @@ pub async fn run_forever() -> Result<(), Box<dyn std::error::Error + Send + Sync
 
 /// Start HTTP daemon as a background task (optional embed in Tauri).
 /// Auto-rescan is owned by the GUI loop when embedded.
+///
+/// Must NOT use bare `tokio::spawn` here — Tauri's `setup` is not on a Tokio
+/// runtime ("there is no reactor running"). Own runtime thread instead.
 pub fn spawn_embedded(state: App) {
-    tokio::spawn(async move {
-        let app = router(state);
-        let addr = SocketAddr::from(([127, 0, 0, 1], PORT));
-        match tokio::net::TcpListener::bind(addr).await {
-            Ok(listener) => {
-                eprintln!("[lwe] embedded HTTP daemon on http://127.0.0.1:{PORT}");
-                if let Err(e) = axum::serve(listener, app).await {
-                    eprintln!("[lwe] HTTP daemon stopped: {e}");
+    let _ = std::thread::Builder::new()
+        .name("lwe-http".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(2)
+                .thread_name("lwe-http-worker")
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("[lwe] HTTP runtime failed: {e}");
+                    return;
                 }
-            }
-            Err(e) => {
-                // already running (e.g. systemd lwe-daemon) — fine
-                eprintln!("[lwe] HTTP daemon not started (port {PORT}): {e}");
-            }
-        }
-    });
+            };
+            rt.block_on(async move {
+                let app = router(state);
+                let addr = SocketAddr::from(([127, 0, 0, 1], PORT));
+                match tokio::net::TcpListener::bind(addr).await {
+                    Ok(listener) => {
+                        eprintln!("[lwe] embedded HTTP daemon on http://127.0.0.1:{PORT}");
+                        if let Err(e) = axum::serve(listener, app).await {
+                            eprintln!("[lwe] HTTP daemon stopped: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        // already running (e.g. systemd lwe-daemon) — fine
+                        eprintln!("[lwe] HTTP daemon not started (port {PORT}): {e}");
+                    }
+                }
+            });
+        });
 }
 
