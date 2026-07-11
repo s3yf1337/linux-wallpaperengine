@@ -16,3 +16,9 @@ AGENTS.md
 *.a
 *.o
 .DS_Store
+# local puppet reverse-engineering screenshot baselines (generated)
+tools/puppet-baselines/
+# git worktree metadata
+.worktrees/
+# generated rendering debug screenshots
+out_p2_*.png

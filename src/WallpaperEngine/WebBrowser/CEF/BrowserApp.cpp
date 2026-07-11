@@ -31,6 +31,8 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
     command_line->AppendSwitch ("--disable-backgrounding-occluded-windows");
     command_line->AppendSwitch ("--disable-background-media-suspend");
     command_line->AppendSwitch ("--disable-renderer-backgrounding");
+    command_line->AppendSwitch ("--disable-gpu-compositing");
+    command_line->AppendSwitch ("--disable-accelerated-video-decode");
     command_line->AppendSwitch ("--disable-test-root-certs");
     command_line->AppendSwitch ("--disable-bundled-ppapi-flash");
     command_line->AppendSwitch ("--disable-breakpad");

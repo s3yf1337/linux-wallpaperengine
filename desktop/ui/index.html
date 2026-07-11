@@ -313,9 +313,20 @@
     width:304px; flex:0 0 304px; background:var(--surface);
     border-left:1px solid var(--border); display:flex; flex-direction:column;
     transition:width .18s ease, flex-basis .18s ease; position:relative;
+    min-height:0; /* shrink inside workspace flex row so panel can scroll */
   }
   .detail.collapsed{ width:40px; flex-basis:40px; }
   .detail.collapsed .detail-inner{ display:none; }
+
+  /* Fill panel height; det-scroll owns overflow-y (long Wallpaper props). */
+  .detail-inner{
+    flex:1 1 auto;
+    min-height:0;
+    height:100%;
+    display:flex;
+    flex-direction:column;
+    overflow:hidden;
+  }
 
   .detail-collapsed-bar{
     display:none; flex-direction:column; align-items:center; justify-content:center;
@@ -331,11 +342,23 @@
     padding:0 8px 0 14px; border-bottom:1px solid var(--border);
   }
   .det-head-t{ font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
-  .det-scroll{ flex:1; overflow-y:auto; }
-  .det-preview{ aspect-ratio:16/9; background:var(--bg); border-bottom:1px solid var(--border); position:relative; }
+  .det-scroll{
+    flex:1 1 auto;
+    min-height:0;
+    overflow-x:hidden;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    scrollbar-width:thin;
+    scrollbar-color:var(--border) transparent;
+  }
+  .det-scroll::-webkit-scrollbar{ width:8px; }
+  .det-scroll::-webkit-scrollbar-track{ background:transparent; }
+  .det-scroll::-webkit-scrollbar-thumb{ background:var(--border); border-radius:4px; }
+  .det-scroll::-webkit-scrollbar-thumb:hover{ background:var(--dim); }
+  .det-preview{ aspect-ratio:16/9; background:var(--bg); border-bottom:1px solid var(--border); position:relative; flex:0 0 auto; }
   .det-preview img{ width:100%; height:100%; object-fit:cover; display:block; }
 
-  .det-body{ padding:14px; }
+  .det-body{ padding:14px 14px 24px; }
   .det-title{ font-size:15px; font-weight:600; color:var(--text); word-break:break-word; }
   .det-id{ font-size:11px; color:var(--dim); margin-top:3px; font-variant-numeric:tabular-nums; }
 
@@ -719,6 +742,10 @@ const state = {
   wsProgress: {},            // id -> {current,total,done,state}
   wsInstalled: {},           // id -> folder path (post-install)
   favorites: new Set(),      // library wallpaper ids (persisted in localStorage)
+  // Wallpaper-specific properties (project.json general.properties)
+  wpProps: [],               // PropDef[] for selected wallpaper
+  wpPropValues: {},          // key -> current value
+  wpPropsId: null,           // id the defs belong to
 };
 
 const FAV_KEY = 'lwe.favorites';
@@ -801,6 +828,8 @@ async function apiStop(){ return invoke('stop'); }
 async function apiCurrent(){ return invoke('current'); }
 async function apiSettings(){ return invoke('get_settings'); }
 async function apiOpen(id){ return invoke('open_folder', { id }); }
+async function apiGetProps(id){ return invoke('get_wallpaper_properties', { id }); }
+async function apiSetProps(id, properties){ return invoke('set_wallpaper_properties', { id, properties }); }
 
 /* Steam / Workshop APIs */
 async function apiSteamModeOn(){ return invoke('steam_mode_on'); }
@@ -1016,6 +1045,125 @@ function settingsHTML(w){
   return h;
 }
 
+
+/** Color "r g b" (0..1 floats) → #rrggbb for <input type=color>. */
+function colorToHex(val){
+  let r=1,g=1,b=1;
+  if(typeof val === 'string'){
+    const parts = val.trim().split(/[\s,]+/).map(Number);
+    if(parts.length >= 3 && parts.every(n => !Number.isNaN(n))){
+      r=parts[0]; g=parts[1]; b=parts[2];
+    }
+  }
+  const clamp = x => Math.max(0, Math.min(255, Math.round((x > 1 ? x : x*255))));
+  const h = n => clamp(n).toString(16).padStart(2,'0');
+  return '#'+h(r)+h(g)+h(b);
+}
+function hexToColor(hex){
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex||'').trim());
+  if(!m) return '1 1 1';
+  const n = parseInt(m[1], 16);
+  const r = ((n>>16)&255)/255, g=((n>>8)&255)/255, b=(n&255)/255;
+  return r+' '+g+' '+b;
+}
+
+function wallpaperPropsHTML(){
+  const props = (state.wpProps || []).filter(p => !p.hidden && p.type !== 'text' && p.type !== 'group');
+  if(!props.length){
+    return '<div class="det-empty-s" style="padding:4px 0">No customizable options for this wallpaper.</div>';
+  }
+  let h = '';
+  for(const p of props){
+    const key = p.key;
+    const label = p.text || key;
+    let cur = state.wpPropValues[key];
+    if(cur === undefined) cur = p.value;
+    if(p.type === 'bool'){
+      const on = cur === true || cur === 1 || cur === '1' || cur === 'true';
+      h += '<div class="set-row"><span class="nm">'+esc(label)+'</span>'
+        + '<button type="button" class="switch '+(on?'on':'')+'" data-wp="'+esc(key)+'" data-wptype="bool"></button></div>';
+    } else if(p.type === 'slider'){
+      const min = (p.min != null) ? p.min : 0;
+      const max = (p.max != null) ? p.max : 100;
+      const step = (p.step != null && p.step > 0) ? p.step : ((max-min) <= 1 ? 0.01 : 1);
+      const val = (cur == null || cur === '') ? min : Number(cur);
+      h += '<div class="set-row"><span class="nm">'+esc(label)
+        + ' <span class="rv" data-wprv="'+esc(key)+'">'+val+'</span></span>'
+        + '<input type="range" class="rng" data-wprng="'+esc(key)+'" min="'+min+'" max="'+max+'" step="'+step+'" value="'+val+'"></div>';
+    } else if(p.type === 'combo'){
+      const opts = (p.options || []);
+      const curS = String(cur == null ? ((opts[0]&&opts[0].value)||'') : cur);
+      const labels = {};
+      opts.forEach(o => { labels[String(o.value)] = o.label || o.value; });
+      const arrow = '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6,9 12,15 18,9"/></svg>';
+      h += '<div class="set-row"><span class="nm">'+esc(label)+'</span>'
+        + '<div class="csel" data-wpsel="'+esc(key)+'" data-value="'+esc(curS)+'">'
+        +   '<button type="button" class="csel-btn" aria-haspopup="listbox">'
+        +     '<span class="csel-val">'+esc(labels[curS] || curS)+'</span>'+arrow
+        +   '</button>'
+        +   '<div class="csel-menu" role="listbox">'
+        +     opts.map(o =>
+              '<button type="button" role="option" class="csel-opt'+(String(o.value)===curS?' active':'')+'" data-v="'+esc(String(o.value))+'" data-label="'+esc(o.label||o.value)+'">'+esc(o.label||o.value)+'</button>'
+            ).join('')
+        +   '</div></div></div>';
+    } else if(p.type === 'color'){
+      const hex = colorToHex(cur);
+      h += '<div class="set-row"><span class="nm">'+esc(label)+'</span>'
+        + '<input type="color" class="wp-color" data-wpcolor="'+esc(key)+'" value="'+hex+'" style="width:42px;height:28px;border:1px solid var(--border);background:transparent;padding:0;cursor:pointer;border-radius:6px"></div>';
+    } else if(p.type === 'textinput' || p.type === 'file' || p.type === 'scenetexture'){
+      const s = (cur == null) ? '' : String(cur);
+      h += '<div class="set-row"><span class="nm">'+esc(label)+'</span>'
+        + '<input type="text" class="wp-text" data-wptext="'+esc(key)+'" value="'+esc(s)+'" style="width:55%;background:var(--panel2,#1a1a1f);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px;font-size:12px"></div>';
+    }
+  }
+  return h;
+}
+
+async function loadWallpaperProps(id){
+  if(!id){
+    state.wpProps = [];
+    state.wpPropValues = {};
+    state.wpPropsId = null;
+    return;
+  }
+  try{
+    const j = await apiGetProps(String(id));
+    const list = (j && j.properties) ? j.properties : [];
+    state.wpProps = list;
+    state.wpPropValues = {};
+    for(const p of list){
+      state.wpPropValues[p.key] = p.value;
+    }
+    state.wpPropsId = String(id);
+  }catch(e){
+    state.wpProps = [];
+    state.wpPropValues = {};
+    state.wpPropsId = String(id);
+  }
+}
+
+function readPanelWpProps(){
+  const out = { ...state.wpPropValues };
+  detailInner.querySelectorAll('.switch[data-wp]').forEach(sw => {
+    out[sw.dataset.wp] = sw.classList.contains('on');
+  });
+  detailInner.querySelectorAll('.rng[data-wprng]').forEach(r => {
+    const v = Number(r.value);
+    out[r.dataset.wprng] = Number.isFinite(v) ? v : r.value;
+  });
+  detailInner.querySelectorAll('.csel[data-wpsel]').forEach(box => {
+    out[box.dataset.wpsel] = box.dataset.value;
+  });
+  detailInner.querySelectorAll('.wp-color[data-wpcolor]').forEach(inp => {
+    out[inp.dataset.wpcolor] = hexToColor(inp.value);
+  });
+  detailInner.querySelectorAll('.wp-text[data-wptext]').forEach(inp => {
+    out[inp.dataset.wptext] = inp.value;
+  });
+  state.wpPropValues = out;
+  return out;
+}
+
 function renderDetail(w){
   if(!w){ detailInner.innerHTML = EMPTY; return; }
   const dir = w.dir || '';
@@ -1074,6 +1222,7 @@ function renderDetail(w){
     +     '<div class="det-actions">'+actions+'</div>'
     +     '<div class="status-line" id="detStatus"></div>'
     +     (state.tab==='library' ? '<div class="set-group"><div class="set-label">Playback</div>'+settingsHTML(w)+'</div>' : '')
+    +     (state.tab==='library' ? '<div class="set-group"><div class="set-label">Wallpaper</div>'+wallpaperPropsHTML()+'</div>' : '')
     +     '<div class="set-group"><div class="set-label">Tags</div><div class="det-tags">'
     +       (w.tags||[]).map(t=>'<span class="badge">'+esc(t)+'</span>').join('')+'</div></div>'
     +   '</div>'
@@ -1095,8 +1244,18 @@ function selectWallpaper(id){
   if(id!=null){
     const c = grid.querySelector('.card[data-id="'+CSS.escape(String(id))+'"]');
     if(c) c.classList.add('selected');
-    renderDetail(findCurItem(id));
+    // Load project.json properties then paint detail (async).
+    const item = findCurItem(id);
+    renderDetail(item); // immediate shell
+    if(state.tab==='library'){
+      loadWallpaperProps(id).then(()=>{
+        if(String(curSelectedId())===String(id)) renderDetail(findCurItem(id));
+      });
+    } else {
+      state.wpProps = []; state.wpPropValues = {}; state.wpPropsId = null;
+    }
   } else {
+    state.wpProps = []; state.wpPropValues = {}; state.wpPropsId = null;
     renderDetail(null);
   }
 }
@@ -1114,7 +1273,9 @@ async function applyWallpaper(id){
   const btn = detailInner.querySelector('#btnApply');
   if(btn) btn.disabled = true;
   try{
-    const j = await apiLaunch(id, settingsPayload());
+    const props = (state.tab==='library') ? readPanelWpProps() : {};
+    const payload = Object.assign({}, settingsPayload(), { properties: props });
+    const j = await apiLaunch(id, payload);
     if(j.ok){
       state.currentId = id;
       if(j.opts) state.settings = mapServerSettings(j.opts);
@@ -1538,6 +1699,12 @@ detailInner.addEventListener('click', e=>{
 
   const sw = e.target.closest('.switch');
   if(sw && !sw.disabled && !sw.closest('.disabled')){
+    // wallpaper property bool
+    if(sw.dataset.wp){
+      sw.classList.toggle('on');
+      readPanelWpProps();
+      return;
+    }
     // ignore pure stub switches (auto, pb)
     const id = sw.dataset.sw;
     if(id==='auto' || id==='pb') return;
@@ -1554,9 +1721,20 @@ detailInner.addEventListener('click', e=>{
 });
 detailInner.addEventListener('input', e=>{
   const r = e.target.closest('.rng'); if(!r || r.disabled) return;
+  if(r.dataset.wprng){
+    const rv = detailInner.querySelector('.rv[data-wprv="'+r.dataset.wprng+'"]');
+    if(rv) rv.textContent = r.value;
+    readPanelWpProps();
+    return;
+  }
   const rv = detailInner.querySelector('.rv[data-rv="'+r.dataset.rng+'"]');
   if(rv) rv.textContent = r.value + (r.dataset.unit||'');
   state.settings = readPanelSettings();
+});
+detailInner.addEventListener('change', e=>{
+  if(e.target.closest('.wp-color') || e.target.closest('.wp-text')){
+    readPanelWpProps();
+  }
 });
 // custom selects (native <select> popup is untamed white on WebKitGTK)
 detailInner.addEventListener('click', e=>{
@@ -1567,10 +1745,11 @@ detailInner.addEventListener('click', e=>{
     if(!box || box.closest('.disabled')) return;
     box.dataset.value = opt.dataset.v;
     const lab = box.querySelector('.csel-val');
-    if(lab) lab.textContent = opt.dataset.v;
+    if(lab) lab.textContent = opt.dataset.label || opt.dataset.v;
     box.querySelectorAll('.csel-opt').forEach(o=>o.classList.toggle('active', o===opt));
     box.classList.remove('open');
-    state.settings = readPanelSettings();
+    if(box.dataset.wpsel){ readPanelWpProps(); }
+    else { state.settings = readPanelSettings(); }
     return;
   }
   const btn = e.target.closest('.csel-btn');

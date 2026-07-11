@@ -91,7 +91,13 @@ pub async fn kill_engine() {
 }
 
 /// Build argv matching lwe-launch (global flags + per-monitor --screen-root/--bg/--scaling).
-pub fn build_args(id: &str, opts: &PlaybackSettings, monitors: &[MonitorInfo]) -> Vec<String> {
+/// `properties` are wallpaper-specific overrides → `--set-property key=value`.
+pub fn build_args(
+    id: &str,
+    opts: &PlaybackSettings,
+    monitors: &[MonitorInfo],
+    properties: &[(String, String)],
+) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     args.push("--assets-dir".into());
     args.push(assets_dir().display().to_string());
@@ -113,6 +119,14 @@ pub fn build_args(id: &str, opts: &PlaybackSettings, monitors: &[MonitorInfo]) -
     }
     if opts.noautomute {
         args.push("--noautomute".into());
+    }
+
+    for (k, v) in properties {
+        if k.is_empty() {
+            continue;
+        }
+        args.push("--set-property".into());
+        args.push(format!("{k}={v}"));
     }
 
     if !monitors.is_empty() {
@@ -137,13 +151,18 @@ pub fn build_args(id: &str, opts: &PlaybackSettings, monitors: &[MonitorInfo]) -
     args
 }
 
-pub async fn spawn_engine(id: &str, opts: &PlaybackSettings) -> Result<Child, String> {
+pub async fn spawn_engine(
+    id: &str,
+    opts: &PlaybackSettings,
+    properties: &[(String, String)],
+) -> Result<Child, String> {
     if !Path::new(ENGINE_BIN).is_file() {
         return Err(format!("binary not found: {ENGINE_BIN}"));
     }
     kill_engine().await;
     let monitors = list_monitors().await;
-    let args = build_args(id, opts, &monitors);
+    let args = build_args(id, opts, &monitors, properties);
+    eprintln!("[lwe] spawn engine: {ENGINE_BIN} {}", args.join(" "));
 
     let mut cmd = Command::new(ENGINE_BIN);
     cmd.args(&args)

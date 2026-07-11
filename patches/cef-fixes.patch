@@ -11,6 +11,19 @@ index 11565a1..35e336a 100644
  # CEF_DISTRIBUTION_TYPE default value should be different based on the type of build
  # debug builds should use standard versions
  # while release version can do with the minimal version
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp b/src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
+index 93c82ed..731b5dd 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
++++ b/src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
+@@ -31,6 +31,8 @@ void BrowserApp::OnBeforeCommandLineProcessing (const CefString& process_type, C
+     command_line->AppendSwitch ("--disable-backgrounding-occluded-windows");
+     command_line->AppendSwitch ("--disable-background-media-suspend");
+     command_line->AppendSwitch ("--disable-renderer-backgrounding");
++    command_line->AppendSwitch ("--disable-gpu-compositing");
++    command_line->AppendSwitch ("--disable-accelerated-video-decode");
+     command_line->AppendSwitch ("--disable-test-root-certs");
+     command_line->AppendSwitch ("--disable-bundled-ppapi-flash");
+     command_line->AppendSwitch ("--disable-breakpad");
 diff --git a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp b/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
 index 14618ce..39e992b 100644
 --- a/src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
@@ -110,12 +123,41 @@ index fc31baa..72e9784 100644
 +GLuint RenderHandler::texture () const { return this->m_webdata->getWallpaperTexture (); }
 \ No newline at end of file
 diff --git a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
-index 8f29be8..0668101 100644
+index 8f29be8..3864dae 100644
 --- a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
 +++ b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
-@@ -44,9 +44,7 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
- 	this->m_contents = this->m_assetLoader.read (file);
- 	callback->Continue ();
+@@ -33,20 +33,26 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
+     const std::string file = path.substr (1);
+ 
+     try {
+-	// try to read the file on the current container, if the file doesn't exists
+-	// an exception will be thrown
+-	if (const char* mime = MimeTypes::getType (file.c_str ()); !mime) {
+-	    this->m_mimeType = "application/octet+stream";
+-	} else {
+-	    this->m_mimeType = mime;
+-	}
+-
+-	this->m_contents = this->m_assetLoader.read (file);
+-	callback->Continue ();
++        // try to read the file on the current container, if the file doesn't exists
++        // an exception will be thrown
++        if (const char* mime = MimeTypes::getType (file.c_str ()); !mime) {
++            this->m_mimeType = "application/octet+stream";
++        } else {
++            this->m_mimeType = mime;
++        }
++
++        this->m_contents = this->m_assetLoader.read (file);
++
++        // determine file size for Content-Length (needed by Chromium <video> media pipeline)
++        this->m_contents->seekg (0, std::ios::end);
++        this->m_fileSize = this->m_contents->tellg ();
++        this->m_contents->seekg (0, std::ios::beg);
++        if (this->m_fileSize <= 0)
++            this->m_fileSize = -1;
++
++        callback->Continue ();
      } catch (AssetLoadException&) {
 -#if !NDEBUG
 -	std::cout << "Cannot read file " << file << std::endl;
@@ -124,11 +166,33 @@ index 8f29be8..0668101 100644
      }
  
      handle_request = true;
+@@ -69,8 +75,7 @@ void WPSchemeHandler::GetResponseHeaders (
+     response->SetMimeType (this->m_mimeType);
+     response->SetStatus (200);
+ 
+-    // signals an unknown-length file
+-    response_length = -1;
++    response_length = this->m_fileSize;
+ }
+ 
+ void WPSchemeHandler::Cancel () { CEF_REQUIRE_IO_THREAD (); }
+diff --git a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h
+index b71061d..3253dcb 100644
+--- a/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h
++++ b/src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h
+@@ -39,6 +39,7 @@ private:
+     const AssetLocator& m_assetLoader;
+     ReadStreamSharedPtr m_contents = nullptr;
+     std::string m_mimeType;
++    int64_t m_fileSize = -1;
+ 
+     IMPLEMENT_REFCOUNTING (WPSchemeHandler);
+     DISALLOW_COPY_AND_ASSIGN (WPSchemeHandler);
 diff --git a/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp b/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
-index 1b2da22..0ab0eec 100644
+index 1b2da22..d13dca4 100644
 --- a/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
 +++ b/src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
-@@ -76,10 +76,19 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
+@@ -76,16 +76,23 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
      // Configurate Chromium
      CefSettings settings;
      std::string cache_path = (std::filesystem::temp_directory_path () / uuid::generate_uuid_v4 ()).string ();
@@ -152,3 +216,9 @@ index 1b2da22..0ab0eec 100644
      //  CefString(&settings.browser_subprocess_path) = "path/to/client"
      cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
      settings.windowless_rendering_enabled = true;
+-#if defined(CEF_NO_SANDBOX)
+     settings.no_sandbox = true;
+-#endif
+ 
+     // spawns two new processess
+ 

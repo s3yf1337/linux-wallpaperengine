@@ -92,9 +92,7 @@ WebBrowserContext::WebBrowserContext (WallpaperEngine::Application::WallpaperApp
     //  CefString(&settings.browser_subprocess_path) = "path/to/client"
     cef_string_utf8_to_utf16 (cache_path.c_str (), cache_path.length (), &settings.root_cache_path);
     settings.windowless_rendering_enabled = true;
-#if defined(CEF_NO_SANDBOX)
     settings.no_sandbox = true;
-#endif
 
     // spawns two new processess
 

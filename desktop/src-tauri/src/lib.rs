@@ -1,6 +1,7 @@
 pub mod engine;
 pub mod http_daemon;
 pub mod index;
+pub mod props;
 pub mod settings;
 pub mod state;
 mod steam;
@@ -69,7 +70,19 @@ async fn launch(
         return Err("missing id".into());
     }
     let base = state.inner.settings.lock().unwrap().clone();
-    let merged = if let Some(patch) = opts {
+    // Split playback opts from wallpaper property overrides.
+    let (playback_patch, prop_patch) = match opts {
+        Some(v) => {
+            let prop_patch = v.get("properties").cloned();
+            let mut play = v;
+            if let Some(obj) = play.as_object_mut() {
+                obj.remove("properties");
+            }
+            (Some(play), prop_patch)
+        }
+        None => (None, None),
+    };
+    let merged = if let Some(patch) = playback_patch {
         settings::merge(&base, &patch)
     } else {
         base
@@ -80,6 +93,10 @@ async fn launch(
     }
     settings::save(&merged);
 
+    let prop_flags: Vec<(String, String)> = props::resolve_for_launch(&id, prop_patch.as_ref())
+        .into_iter()
+        .collect();
+
     {
         let mut ch = state.inner.child.lock().await;
         if let Some(mut c) = ch.take() {
@@ -87,7 +104,7 @@ async fn launch(
         }
     }
 
-    let child = engine::spawn_engine(&id, &merged).await?;
+    let child = engine::spawn_engine(&id, &merged, &prop_flags).await?;
     {
         let mut ch = state.inner.child.lock().await;
         *ch = Some(child);
@@ -101,7 +118,35 @@ async fn launch(
         "ok": true,
         "id": id,
         "opts": merged,
+        "properties": prop_flags
+            .iter()
+            .map(|(k, v)| serde_json::json!({ "key": k, "value": v }))
+            .collect::<Vec<_>>(),
     }))
+}
+
+#[tauri::command]
+fn get_wallpaper_properties(id: String) -> Result<serde_json::Value, String> {
+    let defs = props::get_wallpaper_properties(&id)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "id": id,
+        "properties": defs,
+    }))
+}
+
+#[tauri::command]
+fn set_wallpaper_properties(
+    id: String,
+    properties: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let map = properties
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "properties must be an object".to_string())?;
+    props::set_wallpaper_properties(&id, &map)?;
+    let defs = props::get_wallpaper_properties(&id)?;
+    Ok(serde_json::json!({ "ok": true, "id": id, "properties": defs }))
 }
 
 #[tauri::command]
@@ -233,6 +278,8 @@ pub fn run() {
             current,
             get_settings,
             set_settings,
+            get_wallpaper_properties,
+            set_wallpaper_properties,
             open_folder,
             list_monitors,
             health,

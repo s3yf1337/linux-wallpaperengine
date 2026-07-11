@@ -39,6 +39,7 @@ private:
     const AssetLocator& m_assetLoader;
     ReadStreamSharedPtr m_contents = nullptr;
     std::string m_mimeType;
+    int64_t m_fileSize = -1;
 
     IMPLEMENT_REFCOUNTING (WPSchemeHandler);
     DISALLOW_COPY_AND_ASSIGN (WPSchemeHandler);

@@ -55,11 +55,33 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	throw std::invalid_argument ("Invalid color value");
     }
 
+    // Wallpaper Engine project.json colors are almost always floats in 0..1
+    // (e.g. "1 1 1" for white, "0 0 0" for black). Older / hand-written values
+    // may use 0..255 integers. Heuristic:
+    //  - any RGB component > 1 (or alpha > 1 when present) => 0..255 integers
+    //  - otherwise => 0..1 floats (even when written without a '.')
+    // Previously, absence of '.' forced the 0..255 path, turning "1 1 1" into ~0.004.
+    // Also do NOT inject alpha*255 into the byte-heuristic — that made every 3-comp
+    // color look like bytes.
     if (copy.find ('.') == std::string::npos) {
-	const auto final = vectorSize == 3 ? glm::ivec4 (VectorBuilder::parse<glm::ivec3> (copy), alpha * 255)
-					   : VectorBuilder::parse<glm::ivec4> (copy);
-
-	return { final.r / 255.0f, final.g / 255.0f, final.b / 255.0f, final.a / 255.0f };
+	const auto rgb = VectorBuilder::parse<glm::ivec3> (copy);
+	int aInt = 255;
+	if (vectorSize == 4) {
+	    const auto rgba = VectorBuilder::parse<glm::ivec4> (copy);
+	    aInt = rgba.a;
+	}
+	const bool looksLikeByte = rgb.r > 1 || rgb.g > 1 || rgb.b > 1 || (vectorSize == 4 && aInt > 1);
+	if (looksLikeByte) {
+	    return {
+		rgb.r / 255.0f, rgb.g / 255.0f, rgb.b / 255.0f,
+		(vectorSize == 4 ? aInt : static_cast<int> (alpha * 255)) / 255.0f
+	    };
+	}
+	// 0/1 integer triples are floats (WE scheme/clock colors)
+	return Model::Color (
+	    static_cast<float> (rgb.r), static_cast<float> (rgb.g), static_cast<float> (rgb.b),
+	    vectorSize == 4 ? static_cast<float> (aInt) : alpha
+	);
     }
 
     return Model::Color (

@@ -33,16 +33,24 @@ bool WPSchemeHandler::Open (CefRefPtr<CefRequest> request, bool& handle_request,
     const std::string file = path.substr (1);
 
     try {
-	// try to read the file on the current container, if the file doesn't exists
-	// an exception will be thrown
-	if (const char* mime = MimeTypes::getType (file.c_str ()); !mime) {
-	    this->m_mimeType = "application/octet+stream";
-	} else {
-	    this->m_mimeType = mime;
-	}
+        // try to read the file on the current container, if the file doesn't exists
+        // an exception will be thrown
+        if (const char* mime = MimeTypes::getType (file.c_str ()); !mime) {
+            this->m_mimeType = "application/octet+stream";
+        } else {
+            this->m_mimeType = mime;
+        }
 
-	this->m_contents = this->m_assetLoader.read (file);
-	callback->Continue ();
+        this->m_contents = this->m_assetLoader.read (file);
+
+        // determine file size for Content-Length (needed by Chromium <video> media pipeline)
+        this->m_contents->seekg (0, std::ios::end);
+        this->m_fileSize = this->m_contents->tellg ();
+        this->m_contents->seekg (0, std::ios::beg);
+        if (this->m_fileSize <= 0)
+            this->m_fileSize = -1;
+
+        callback->Continue ();
     } catch (AssetLoadException&) {
 	std::cerr << "[LWE-WEB] scheme CANNOT READ file=" << file << std::endl;
     }
@@ -67,8 +75,7 @@ void WPSchemeHandler::GetResponseHeaders (
     response->SetMimeType (this->m_mimeType);
     response->SetStatus (200);
 
-    // signals an unknown-length file
-    response_length = -1;
+    response_length = this->m_fileSize;
 }
 
 void WPSchemeHandler::Cancel () { CEF_REQUIRE_IO_THREAD (); }

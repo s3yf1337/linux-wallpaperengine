@@ -145,7 +145,11 @@ async fn route_launch(State(st): State<App>, Query(q): Query<LaunchQ>) -> Respon
         }
     }
 
-    match engine::spawn_engine(&id, &merged).await {
+    // HTTP gallery has no property UI yet — use saved overrides if any.
+    let prop_flags: Vec<(String, String)> = crate::props::resolve_for_launch(&id, None)
+        .into_iter()
+        .collect();
+    match engine::spawn_engine(&id, &merged, &prop_flags).await {
         Ok(child) => {
             {
                 let mut ch = st.child.lock().await;
