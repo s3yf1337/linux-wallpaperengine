@@ -192,6 +192,7 @@
   .fitem.active{ background:var(--soft); color:var(--text); border-left-color:var(--accent); }
   .fitem.active .fname{ color:var(--accent); }
   .fname{ font-size:13px; }
+  .fname.dim{ opacity:.38; }
   .fcount{ margin-left:auto; font-size:11px; color:var(--dim); font-variant-numeric:tabular-nums; }
 
   .chk{
@@ -433,6 +434,13 @@
   .det-tags{ display:flex; flex-wrap:wrap; gap:6px; }
   .det-tags .badge{ font-size:11px; padding:2px 8px; }
 
+  /* collapsible tag categories in sidebar */
+  .tag-cat-header{ cursor:pointer; user-select:none; display:flex; align-items:center; gap:3px; }
+  .tag-cat-header:hover{ color:var(--accent); }
+  .tag-cat-arrow{ display:inline-flex; align-items:center; justify-content:center; width:12px; height:12px; flex:0 0 auto; transition:transform .15s; font-size:9px; transform-origin:center; }
+  .tag-cat-header.collapsed .tag-cat-arrow{ transform:rotate(-90deg); }
+  .tag-group-body.collapsed{ display:none; }
+
   .det-empty{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--dim); text-align:center; padding:30px; }
   .det-empty .ic{ width:48px; height:48px; border:1px solid var(--border); display:flex; align-items:center; justify-content:center; color:var(--dim); }
   .det-empty-t{ font-size:14px; color:var(--text); }
@@ -597,6 +605,13 @@
           <input id="searchMain" type="text" placeholder="Search by name, tag or id…">
         </div>
         <div class="counter" id="counter"><b>0</b> / 0</div>
+        <select id="sortSelect" style="display:none;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;font-size:12px;cursor:pointer;margin-left:10px" title="Sort order">
+          <option value="newest">Newest</option>
+          <option value="subscribers">Most Subscribed</option>
+          <option value="rating">Highest Rated</option>
+          <option value="trending">Trending</option>
+          <option value="updated">Recently Updated</option>
+        </select>
         <div class="spacer"></div>
         <div class="scan" id="scan" style="display:none">
           <span class="dot"></span>
@@ -614,6 +629,11 @@
       </div>
       <div class="grid-wrap" id="gridWrap">
         <div class="grid" id="grid"></div>
+        <div id="pageNavWrap" style="display:none;text-align:center;padding:16px">
+          <button class="btn" id="pagePrev">‹ Prev</button>
+          <span style="display:inline-block;padding:6px 14px;font-size:13px;color:var(--dim)" id="pageInfo">Page 1 / 1</span>
+          <button class="btn" id="pageNext">Next ›</button>
+        </div>
       </div>
     </main>
 
@@ -737,10 +757,14 @@ const state = {
   wsLoading: false,
   wsTotal: 0,
   wsPage: 1,
+  wsSort: 'newest',
   wsSelectedId: null,       // separate selection per tab
   wsCurrentId: null,        // currently launched wallpaper id (shared with library)
   wsProgress: {},            // id -> {current,total,done,state}
   wsInstalled: {},           // id -> folder path (post-install)
+  wsHasMore: false,          // more pages available in workshop
+  wsTypeTag: null,           // current TYPE tag filter for workshop ("Scene"/"Video"/etc)
+  collapsedCats: new Set(),  // collapsed tag category names
   favorites: new Set(),      // library wallpaper ids (persisted in localStorage)
   // Wallpaper-specific properties (project.json general.properties)
   wpProps: [],               // PropDef[] for selected wallpaper
@@ -855,24 +879,160 @@ function toast(msg, kind){
 /* ---------- Sidebar ---------- */
 function renderSidebar(){
   const items = curItems();
-  const types = state.tab==='workshop'
-    ? [['all','All'],['scene','Scene'],['video','Video'],['web','Web'],['collection','Collections'],['art','Art']]
-    : [['all','All'],['scene','Scene'],['video','Video'],['web','Web']];
-  typeList.innerHTML = types.map(([k,l])=>{
-    const cnt = k==='all' ? items.length : items.filter(w=>w.type===k).length;
+  // Dynamic types — all known workshop types (not just current page)
+  const typeCounts = {};
+  items.forEach(w => { const t = w.type; if (t) typeCounts[t] = (typeCounts[t]||0) + 1; });
+  let typeListData;
+  if (state.tab === 'workshop') {
+    typeListData = ['scene','video','web'];
+  } else {
+    const typeOrder = ['scene','video','web','collection','art','application','game','software'];
+    typeListData = Object.keys(typeCounts).sort((a,b) => {
+      const ai = typeOrder.indexOf(a), bi = typeOrder.indexOf(b);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+  }
+  const isPaginated = state.tab === 'workshop' && state.wsHasMore;
+  const allCnt = Object.values(typeCounts).reduce((a,b)=>a+b, 0);
+  typeList.innerHTML = [['all','All'], ...typeListData.map(t => [t, t[0].toUpperCase()+t.slice(1)])].map(([k,l])=>{
+    const cnt = k === 'all' ? allCnt : (typeCounts[k]||0);
+    const cntStr = isPaginated && cnt > 0 ? cnt + '+' : (cnt > 0 ? String(cnt) : '');
     return '<div class="fitem type-item '+(state.type===k?'active':'')+'" data-type="'+k+'">'
-         + typeIcon(k==='all'?'scene':k) + '<span class="fname">'+l+'</span><span class="fcount">'+cnt+'</span></div>';
+         + typeIcon(k==='all'?'scene':k) + '<span class="fname">'+l+'</span><span class="fcount">'+cntStr+'</span></div>';
   }).join('');
 
-  // Tags for workshop come from `QueryResult.tags` (real author tags from Steam UGC API),
-  // no Library heuristics.
+  // Tags — full Steam WE workshop tag taxonomy
   const tagCounts = {};
-  items.forEach(w=>(w.tags||[]).forEach(t=>tagCounts[t]=(tagCounts[t]||0)+1));
-  tagList.innerHTML = Object.keys(tagCounts).sort((a,b)=>a.localeCompare(b)).map(t=>{
-    return '<label class="fitem tag-item '+(state.tags.has(t)?'active':'')+'">'
-         + '<input type="checkbox" class="chk" data-tag="'+esc(t)+'" '+(state.tags.has(t)?'checked':'')+'>'
-         + '<span class="fname">'+esc(t)+'</span><span class="fcount">'+tagCounts[t]+'</span></label>';
-  }).join('');
+  items.forEach(w => (w.tags||[]).forEach(t => { tagCounts[t] = (tagCounts[t]||0) + 1; }));
+
+  const TAG_MAP = {
+    // TYPE — handled by sidebar type filter, excluded from tags
+    'Scene': null, 'Video': null, 'Application': null, 'Web': null,
+    // AGE RATING
+    'Everyone': 'Age Rating', 'Questionable': 'Age Rating', 'Mature': 'Age Rating',
+    // GENRE
+    'Abstract': 'Genre', 'Animal': 'Genre', 'Anime': 'Genre', 'Cartoon': 'Genre',
+    'CGI': 'Genre', 'Cyberpunk': 'Genre', 'Fantasy': 'Genre', 'Game': 'Genre',
+    'Girls': 'Genre', 'Guys': 'Genre', 'Landscape': 'Genre', 'Medieval': 'Genre',
+    'Memes': 'Genre', 'MMD': 'Genre', 'Music': 'Genre', 'Nature': 'Genre',
+    'Pixel art': 'Genre', 'Relaxing': 'Genre', 'Retro': 'Genre', 'Sci-Fi': 'Genre',
+    'Sports': 'Genre', 'Technology': 'Genre', 'Television': 'Genre', 'Vehicle': 'Genre',
+    'Unspecified': 'Genre',
+    // RESOLUTION
+    'Standard Definition': 'Resolution', '1280 x 720': 'Resolution',
+    '1366 x 768': 'Resolution', '1920 x 1080': 'Resolution',
+    '2560 x 1440': 'Resolution', '3840 x 2160': 'Resolution',
+    'Ultrawide Standard Definition': 'Resolution', 'Ultrawide 2560 x 1080': 'Resolution',
+    'Ultrawide 3440 x 1440': 'Resolution', 'Dual Standard Definition': 'Resolution',
+    'Dual 3840 x 1080': 'Resolution', 'Dual 5120 x 1440': 'Resolution',
+    'Dual 7680 x 2160': 'Resolution', 'Triple Standard Definition': 'Resolution',
+    'Triple 4096 x 768': 'Resolution', 'Triple 5760 x 1080': 'Resolution',
+    'Triple 7680 x 1440': 'Resolution', 'Triple 11520 x 2160': 'Resolution',
+    'Portrait Standard Definition': 'Resolution', 'Portrait 720 x 1280': 'Resolution',
+    'Portrait 1080 x 1920': 'Resolution', 'Portrait 1440 x 2560': 'Resolution',
+    'Portrait 2160 x 3840': 'Resolution', 'Other resolution': 'Resolution',
+    'Dynamic resolution': 'Resolution',
+    // CATEGORY
+    'Wallpaper': 'Category', 'Preset': 'Category', 'Asset': 'Category',
+    // ASSET TYPE
+    'Particle': 'Asset Type', 'Image': 'Asset Type', 'Sound': 'Asset Type',
+    'Model': 'Asset Type', 'Text': 'Asset Type', 'Sprite': 'Asset Type',
+    'Fullscreen': 'Asset Type', 'Composite': 'Asset Type', 'Script': 'Asset Type',
+    'Effect': 'Asset Type', 'Scripted Layer': 'Asset Type',
+    // ASSET GENRE
+    'Audio Visualizer': 'Asset Genre', 'Background': 'Asset Genre',
+    'Character': 'Asset Genre', 'Clock': 'Asset Genre', 'Fire': 'Asset Genre',
+    'Interactive': 'Asset Genre', 'Magic': 'Asset Genre',
+    'Post Processing': 'Asset Genre', 'Smoke': 'Asset Genre', 'Space': 'Asset Genre',
+    // SCRIPT TYPE
+    'Boolean': 'Script Type', 'Number': 'Script Type', 'Vec2': 'Script Type',
+    'Vec3': 'Script Type', 'Vec4': 'Script Type', 'String': 'Script Type',
+    'No Animation': 'Script Type', 'Oversized': 'Script Type',
+    // STEAM FLAGS — hidden
+    'Approved': null, 'Workshop': null,
+    // FEATURES / MISCELLANEOUS
+    'Audio responsive': 'Features', '3D': 'Features', 'Customizable': 'Features',
+    'Puppet Warp': 'Features', 'HDR': 'Features', 'Media Integration': 'Features',
+    'User Shortcut': 'Features', 'Video Texture': 'Features', 'Asset Pack': 'Features',
+  };
+
+  function tagCat(tag) {
+    const c = TAG_MAP[tag];
+    if (c !== undefined) return c;
+    const ci = tag.indexOf(':');
+    if (ci > 0 && ci < tag.length - 1) return tag.slice(0, ci).trim();
+    if (/^\d+\s*x\s*\d+/.test(tag) || /^(4K|8K|1440p|1080p|720p|2160p)$/i.test(tag)) return 'Resolution';
+    return null;
+  }
+
+  // Build list of all known categorized tags
+  // Workshop: full taxonomy from TAG_MAP + any item tags with a category
+  // Library: only tags present in current items
+  const knownTags = {};
+  if (state.tab === 'workshop') {
+    for (const [tag, cat] of Object.entries(TAG_MAP)) {
+      if (cat != null) knownTags[tag] = cat;
+    }
+    // Also categorize any item tags not already in TAG_MAP
+    for (const t of Object.keys(tagCounts)) {
+      if (!(t in knownTags)) {
+        const cat = tagCat(t);
+        if (cat) knownTags[t] = cat;
+      }
+    }
+  } else {
+    for (const t of Object.keys(tagCounts)) {
+      const cat = tagCat(t);
+      if (cat) knownTags[t] = cat;
+    }
+  }
+
+  const catTags = {}, flatTags = [];
+  for (const [t, cat] of Object.entries(knownTags).sort(([a],[b]) => a.localeCompare(b))) {
+    (catTags[cat] = catTags[cat] || []).push({ tag: t, cnt: tagCounts[t] || 0 });
+  }
+  // Flat tags only from items & not in TAG_MAP at all (not even as null)
+  for (const t of Object.keys(tagCounts)) {
+    if (!(t in knownTags) && !(t in TAG_MAP) && !tagCat(t)) {
+      flatTags.push({ tag: t, cnt: tagCounts[t] });
+    }
+  }
+
+  const catOrder = ['Age Rating','Genre','Resolution','Category','Asset Type','Asset Genre','Script Type','Features'];
+  const sortedCats = Object.keys(catTags).sort((a,b) => {
+    const ai = catOrder.indexOf(a), bi = catOrder.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  const cntStr = n => isPaginated && n > 0 ? n + '+' : (n > 0 ? String(n) : '');
+  let tagHtml = '';
+  for (const cat of sortedCats) {
+    const collapsed = state.collapsedCats.has(cat) ? ' collapsed' : '';
+    tagHtml += '<div class="tag-group" data-cat="'+esc(cat)+'">'
+      + '<div class="side-label tag-cat-header'+collapsed+'" data-ctoggle="'+esc(cat)+'" style="margin-top:8px;font-size:10px">'
+      + '<span class="tag-cat-arrow">▾</span> '+esc(cat)+'</div>'
+      + '<div class="tag-group-body'+(collapsed?' collapsed':'')+'">';
+    for (const {tag, cnt} of catTags[cat]) {
+      tagHtml += '<label class="fitem tag-item '+(state.tags.has(tag)?'active':'')+'">'
+        + '<input type="checkbox" class="chk" data-tag="'+esc(tag)+'" '+(state.tags.has(tag)?'checked':'')+'>'
+        + '<span class="fname'+(cnt===0?' dim':'')+'">'+esc(tag)+'</span>'
+        + (cnt > 0 ? '<span class="fcount">'+cntStr(cnt)+'</span>' : '')+'</label>';
+    }
+    tagHtml += '</div></div>';
+  }
+  if (flatTags.length) {
+    const collapsed = state.collapsedCats.has('Tags') ? ' collapsed' : '';
+    tagHtml += '<div class="tag-group" data-cat="Tags">'
+      + '<div class="side-label tag-cat-header'+collapsed+'" data-ctoggle="Tags" style="margin-top:8px;font-size:10px">'
+      + '<span class="tag-cat-arrow">▾</span> Tags</div>'
+      + '<div class="tag-group-body'+(collapsed?' collapsed':'')+'">';
+    for (const {tag, cnt} of flatTags) {
+      tagHtml += '<label class="fitem tag-item '+(state.tags.has(tag)?'active':'')+'">'
+        + '<input type="checkbox" class="chk" data-tag="'+esc(tag)+'" '+(state.tags.has(tag)?'checked':'')+'>'
+        + '<span class="fname">'+esc(tag)+'</span><span class="fcount">'+cntStr(cnt)+'</span></label>';
+    }
+    tagHtml += '</div></div>';
+  }
+  tagList.innerHTML = tagHtml;
 }
 
 /* ---------- Grid ---------- */
@@ -957,6 +1117,22 @@ function applyFilters(){
   renderGrid(list);
   const total = state.tab==='workshop' ? (state.wsTotal || items.length) : items.length;
   counter.innerHTML = '<b>'+list.length+'</b> / '+total;
+  // Page nav: show for workshop when we have results
+  const pn = $('pageNavWrap');
+  if (pn) {
+    pn.style.display = (state.tab === 'workshop' && state.wsItems.length > 0) ? 'block' : 'none';
+  }
+  // Update page info
+  const pi = $('pageInfo');
+  if (pi) {
+    const perPage = 50;
+    const totalPg = state.wsTotal > 0 ? Math.ceil(state.wsTotal / perPage) : 1;
+    pi.textContent = 'Page ' + state.wsPage + ' / ' + totalPg;
+  }
+  // Enable/disable prev/next
+  const pp = $('pagePrev'), pn2 = $('pageNext');
+  if (pp) pp.disabled = state.wsPage <= 1;
+  if (pn2) pn2.disabled = state.wsPage * 50 >= state.wsTotal;
 }
 function resetFilters(){
   state.type='all'; state.tags.clear(); state.term='';
@@ -1323,7 +1499,9 @@ function setTab(tab){
   const sc = document.querySelector('.side-scroll'); if(sc) sc.scrollTop = 0;
   tabLibrary.classList.toggle('active', tab==='library');
   tabWorkshop.classList.toggle('active', tab==='workshop');
-  // Placeholder for search
+  // Toggle sort selector visibility
+  const ss = $('sortSelect');
+  if (ss) ss.style.display = (tab === 'workshop') ? '' : 'none';
   if(searchSide) searchSide.placeholder = tab==='workshop' ? 'Search Workshop…' : 'Search library…';
   if(searchMain) searchMain.placeholder = tab==='workshop' ? 'Search Workshop…' : 'Search by name, tag or id…';
   renderSidebar(); applyFilters();
@@ -1409,17 +1587,25 @@ async function runWorkshopQuery(opts){
   if(state.wsLoading) return;
   state.wsLoading = true;
   clearWsScanTimer();
+  // keepPage: page already set by wsGoPage; else reset to 1
+  if (!opts?.keepPage) {
+    state.wsPage = 1;
+  }
   const scan = $('scan'), scanBar = $('scanBar'), scanFile = $('scanFile');
   scan.style.display = 'flex'; scan.classList.add('is-on');
   scanBar.style.width = '15%'; scanFile.textContent = 'querying Steam Workshop…';
   let p = 15;
   _wsScanTimer = setInterval(()=>{ p = Math.min(90, p+4); scanBar.style.width = p+'%'; }, 200);
   try{
+    // Merge user tag filters with wsTypeTag
+    let tags = state.tags.size ? [...state.tags] : [];
+    if (state.wsTypeTag && !tags.includes(state.wsTypeTag)) tags.push(state.wsTypeTag);
     const args = {
       page: state.wsPage || 1,
       searchText: opts?.searchText ?? (state.term || undefined),
-      requiredTags: opts?.requiredTags ?? (state.tags.size ? [...state.tags] : undefined),
-      excludedTags: opts?.excludedTags
+      requiredTags: tags.length ? tags : undefined,
+      excludedTags: opts?.excludedTags,
+      sort: state.wsSort,
     };
     const j = await apiWorkshopQuery(args);
     if(!j.ok) throw new Error(j.error||'query failed');
@@ -1502,6 +1688,7 @@ function listenWorkshop(){
     if(payload.ok){
       state.wsItems = payload.items || [];
       state.wsTotal = payload.total || state.wsItems.length;
+      state.wsHasMore = state.wsItems.length < state.wsTotal;
       scanBar.style.width = '100%';
       scanFile.textContent = 'workshop: ' + state.wsItems.length + ' / ' + state.wsTotal + ' items';
       if(state.tab==='workshop'){
@@ -1623,11 +1810,34 @@ function readPanelSettings(){
 }
 
 /* ---------- Events ---------- */
+/* Collapse toggle for tag categories */
+tagList.addEventListener('click', e => {
+  const h = e.target.closest('[data-ctoggle]');
+  if (!h) return;
+  const cat = h.dataset.ctoggle;
+  if (state.collapsedCats.has(cat)) state.collapsedCats.delete(cat);
+  else state.collapsedCats.add(cat);
+  renderSidebar();
+});
+
+/* Debounced tag query for Workshop — avoid re-query on every click */
+let _wsTagTimer = 0;
+
 typeList.addEventListener('click', e=>{
   const it = e.target.closest('.type-item'); if(!it) return;
   state.type = it.dataset.type;
   typeList.querySelectorAll('.type-item').forEach(x=>x.classList.toggle('active', x===it));
-  applyFilters();
+  if(state.tab==='workshop' && state.steamOn){
+    // Map type to Steam TYPE tag and re-query
+    const typeMap = { 'scene':'Scene','video':'Video','web':'Web','application':'Application' };
+    state.wsTypeTag = typeMap[state.type] || null;
+    clearTimeout(_wsTagTimer);
+    state.wsPage = 1;
+    state.wsLoading = false;
+    runWorkshopQuery();
+  } else {
+    applyFilters();
+  }
 });
 tagList.addEventListener('change', e=>{
   const c = e.target.closest('.chk'); if(!c) return;
@@ -1635,8 +1845,12 @@ tagList.addEventListener('change', e=>{
   if(c.checked) state.tags.add(t); else state.tags.delete(t);
   c.closest('.tag-item').classList.toggle('active', c.checked);
   if(state.tab==='workshop' && state.steamOn){
-    state.wsPage = 1; state.wsLoading = false;
-    runWorkshopQuery({ requiredTags: state.tags.size ? [...state.tags] : undefined });
+    // Debounce: wait 400ms after last tag change before re-querying Steam
+    clearTimeout(_wsTagTimer);
+    _wsTagTimer = setTimeout(() => {
+      state.wsPage = 1; state.wsLoading = false;
+      runWorkshopQuery({ requiredTags: state.tags.size ? [...state.tags] : undefined });
+    }, 400);
   } else {
     applyFilters();
   }
@@ -1644,6 +1858,7 @@ tagList.addEventListener('change', e=>{
 $('clearTags').addEventListener('click', ()=>{
   state.tags.clear(); renderSidebar();
   if(state.tab==='workshop' && state.steamOn){
+    clearTimeout(_wsTagTimer);
     state.wsPage = 1; state.wsLoading = false;
     runWorkshopQuery({ requiredTags: undefined });
   } else applyFilters();
@@ -1790,6 +2005,21 @@ $('rescanBtn').addEventListener('click', runScan);
 $('menuRescan').addEventListener('click', runScan);
 $('menuStop').addEventListener('click', stopWallpaper);
 
+/* ---------- Workshop: page nav + sort ---------- */
+function wsGoPage(page) {
+  if (page < 1) return;
+  state.wsPage = page;
+  state.wsLoading = false;
+  runWorkshopQuery({ keepPage: true });
+}
+$('pagePrev').addEventListener('click', () => wsGoPage(state.wsPage - 1));
+$('pageNext').addEventListener('click', () => wsGoPage(state.wsPage + 1));
+$('sortSelect').addEventListener('change', e => {
+  state.wsSort = e.target.value;
+  state.wsPage = 1;
+  state.wsLoading = false;
+  runWorkshopQuery();
+});
 
 /* window controls (decorations:false) */
 (function(){

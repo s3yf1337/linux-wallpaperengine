@@ -125,6 +125,7 @@ fn file_type_label(ft: &FileType) -> &'static str {
 
 /// Prefer real author tags Scene/Video/Web (standard WE workshop tags) over
 /// FileType::Community which is what almost all WE projects report.
+/// Falls back to file extension heuristic when tags don't give a match.
 fn wallpaper_type(qr: &QueryResult) -> String {
     for t in &qr.tags {
         match t.to_ascii_lowercase().as_str() {
@@ -134,6 +135,23 @@ fn wallpaper_type(qr: &QueryResult) -> String {
             _ => {}
         }
     }
+    // Tag heuristic failed — check file extension
+    let fname = qr.file_name.to_ascii_lowercase();
+    if fname.ends_with(".mp4")
+        || fname.ends_with(".webm")
+        || fname.ends_with(".avi")
+        || fname.ends_with(".mov")
+        || fname.ends_with(".mkv")
+    {
+        return "video".into();
+    }
+    if fname.ends_with(".html") || fname.ends_with(".htm") {
+        return "web".into();
+    }
+    if fname.ends_with(".pkg") || fname == "project.json" || fname.is_empty() {
+        return "scene".into();
+    }
+    // Last resort: Steam FileType enum
     file_type_label(&qr.file_type).to_string()
 }
 
@@ -268,6 +286,9 @@ pub struct QueryArgs {
     pub search_text: Option<String>,
     pub required_tags: Option<Vec<String>>,
     pub excluded_tags: Option<Vec<String>>,
+    /// Sort order: "newest", "subscribers", "rating", "trending", "updated"
+    #[serde(default)]
+    pub sort: Option<String>,
 }
 
 /// `workshop_query` — issue a UGC query for all Wallpaper Engine workshop items,
@@ -292,15 +313,23 @@ pub async fn workshop_query(
     let page = args.page.unwrap_or(1).max(1);
     let ugc = client.ugc();
     // Text search needs RankedByTextSearch; otherwise publication date is fine.
-    let query_type = if args
+    let has_text = args
         .search_text
         .as_deref()
         .map(|s| !s.trim().is_empty())
-        .unwrap_or(false)
-    {
-        UGCQueryType::RankedByTextSearch
-    } else {
-        UGCQueryType::RankedByPublicationDate
+        .unwrap_or(false);
+    let query_type = match args.sort.as_deref() {
+        Some("subscribers") => UGCQueryType::RankedByTotalUniqueSubscriptions,
+        Some("rating") => UGCQueryType::RankedByVote,
+        Some("trending") => UGCQueryType::RankedByTrend,
+        Some("favorites") | Some("updated") => UGCQueryType::RankedByLastUpdatedDate,
+        _ => {
+            if has_text {
+                UGCQueryType::RankedByTextSearch
+            } else {
+                UGCQueryType::RankedByPublicationDate
+            }
+        }
     };
     let q: QueryHandle = ugc
         .query_all(
